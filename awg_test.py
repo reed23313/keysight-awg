@@ -10,18 +10,38 @@ CHASSIS = 1
 
 # change slot number to your value
 SLOT = 5
-CHANNELS = [1, 2, 3]
-DELAYS = [0, 0, 0]
+#CHANNELS = [1, 2, 3]
+CHANNELS = [1, 2]
+#DELAYS = [2, 2, 0] # delay in ns
+DELAYS = [0, 2] # delay in ns
 AMPLITUDE = 1.0
 
+WAVEFORM = [
+    [0.5, 1, 0.7, 0.2], # best (low ripple pulse) we have so far: 2.3ns FWHM
+    #[0.75, 1, 0.3, 0.1], # this is pretty good, moderate ripple, 1.9ns FWHM
+    #[0.6, 1, 0.5, 0.1], # this is pretty good, low ripple, 2.1ns FWHM
+    [0.7, 1, 0.4, 0.0]
+]
+
 #waveform_data_list = [i/100 for i in range(100)]
-waveform_data_list = [[0]*100 for channel in CHANNELS]
+BUFFER_LENGTH = 1000
+waveform_data_list = []
 for channel in CHANNELS:
-    if channel == 1 or channel == 2:
-        waveform_data_list[channel-1] = [0, 0, 0.5, 1, 0.7, 0.2] + [0]*4
-    else:
-        waveform_data_list[channel-1] = [0.5, 1, 0.7, 0.2, 0] + [0]*5
-    waveform_data_list[channel-1] = waveform_data_list[channel-1] * 5
+    # pad beginning of pulses
+    # do fine delay adjustments
+    # modulo 5 since delay argument to AWGfromArray is in multiples of 5 samples
+    waveform_data_list.append([])
+    for d in range(DELAYS[channel-1] % 5):
+        waveform_data_list[channel-1].append(0)
+    # optimal (?) fast pulse waveform with minimal ripple
+    # (this seems to act like some sort of FIR filter to cancel the super ripply impulse response of analog front end in AWG)
+    waveform_data_list[channel-1] += WAVEFORM[channel-1]
+    # pad end of pulse with zeros
+    waveform_data_list[channel-1] += [0]*(BUFFER_LENGTH - len(waveform_data_list[channel-1]))
+    # store multiple pulses in buffer
+    # better to read through a long buffer than have to recycle through it at a high frequency; the buffering in the AWG can't keep up
+    if BUFFER_LENGTH < 50:
+        waveform_data_list[channel-1] = waveform_data_list[channel-1] * 5
 
 # CREATE AND OPEN MODULE
 module = keysightSD1.SD_AOU()
@@ -34,10 +54,12 @@ else:
     print("slot:", module.getSlot())
     print("Chassis:", module.getChassis())
     print()
-    wave = keysightSD1.SD_Wave()
+    awg_mask = 0
     for channel in CHANNELS:
+        awg_mask += 2**(channel-1)
         module.channelWaveShape(channel, keysightSD1.SD_Waveshapes.AOU_AWG)
         module.channelAmplitude(channel, AMPLITUDE)
+        module.AWGflush(channel)
 
         # WAVEFORM FROM ARRAY/LIST
         # This function is equivalent to create a waveform with new,
@@ -51,11 +73,26 @@ else:
         #               6: ExTTRIG_CYCLE
         # startDelay - delay in multiples of 5ns for M3202A, multiples of 10ns for M3201A, max values 2^16 - 1
         #               to get finer resolution, change the delay manually by changing the data stored in the buffer
-        error = module.AWGfromArray(channel, 0, DELAYS[channel-1], 0, 0, 0, waveform_data_list[channel-1])
+        #module.AWGfromArray(channel, 0, DELAYS[channel-1]//5,0,0,0,waveform_data_list[channel-1])
+        waveformID = channel
+        wave = keysightSD1.SD_Wave()
+        res = wave.newFromArrayDouble(0, waveform_data_list[channel-1])
+        error = module.waveformLoad(wave, waveformID, 0)
         if error < 0:
-            print(f"AWG from array error (channel {channel}):", error)
+            print(f"AWG load waveform error (channel {channel}):", error)
         else:
-            print("AWG from array started successfully")
+            print(f"AWG waveform loaded in channel {channel} successfully")
+        error = module.AWGqueueWaveform(channel, waveformID, 0, DELAYS[channel-1]//5, 0, 0)
+        if error < 0:
+            print(f"AWG queue waveform error (channel {channel}):", error)
+        else:
+            print(f"AWG waveform queued in channel {channel} successfully")
+    # start all AWGs simultaneously
+    error = module.AWGstartMultiple(awg_mask)
+    if error < 0:
+        print(f"AWG start error:", error)
+    else:
+        print("AWG started successfully")
     # exiting...
     input("Press any key to stop AWG")
     for channel in CHANNELS:
