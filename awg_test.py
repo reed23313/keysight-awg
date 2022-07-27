@@ -59,6 +59,7 @@ else:
         awg_mask += 2**(channel-1)
         module.channelWaveShape(channel, keysightSD1.SD_Waveshapes.AOU_AWG)
         module.channelAmplitude(channel, AMPLITUDE)
+        # very important, behavior seems wonky if the AWG queue fills up
         module.AWGflush(channel)
 
         # WAVEFORM FROM ARRAY/LIST
@@ -74,6 +75,9 @@ else:
         # startDelay - delay in multiples of 5ns for M3202A, multiples of 10ns for M3201A, max values 2^16 - 1
         #               to get finer resolution, change the delay manually by changing the data stored in the buffer
         #module.AWGfromArray(channel, 0, DELAYS[channel-1]//5,0,0,0,waveform_data_list[channel-1])
+
+        # instead of using AWGfromArray (which will start the channels at different times),
+        # separately load the data into each channel's queue and then start all channels simultaneously)
         waveformID = channel
         wave = keysightSD1.SD_Wave()
         res = wave.newFromArrayDouble(0, waveform_data_list[channel-1])
