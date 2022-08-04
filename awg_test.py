@@ -2,7 +2,10 @@
 # ----------
 # Import required system components
 import sys
+
+sys.path.append('C:\Program Files (x86)\Keysight\SD1\Libraries\Python')
 import keysightSD1
+import matplotlib.pyplot as plt
 
 # MODULE CONSTANTS
 PRODUCT = "M3202A"
@@ -13,7 +16,7 @@ SLOT = 5
 #CHANNELS = [1, 2, 3]
 CHANNELS = [1, 2]
 #DELAYS = [2, 2, 0] # delay in ns
-DELAYS = [0, 2] # delay in ns
+DELAYS = [0, 0] # delay in ns
 AMPLITUDE = 1.0
 
 WAVEFORM = [
