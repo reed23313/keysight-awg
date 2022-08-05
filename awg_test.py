@@ -5,7 +5,6 @@ import sys
 
 sys.path.append('C:\Program Files (x86)\Keysight\SD1\Libraries\Python')
 import keysightSD1
-import matplotlib.pyplot as plt
 
 # MODULE CONSTANTS
 PRODUCT = "M3202A"

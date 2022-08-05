@@ -1,6 +1,5 @@
 # This sample program shows how Python uses the Keysight SD1 Programming Libraries.
 # ----------
-# Import required system components
 import sys
 import time
 import matplotlib.pyplot as plt
@@ -11,6 +10,7 @@ import keysightSD1
 from keysightSD1 import AIN_Impedance as imp
 from keysightSD1 import AIN_Coupling as cpl
 from keysightSD1 import SD_TriggerModes as trg
+from keysightSD1 import SD_AIN_TriggerMode as atrg
 
 class AWG:
 
@@ -61,6 +61,7 @@ class AWG:
 
     def launch_channels(self, awg_mask):
         for channel in self.channels.keys():
+            self.awg.AWGflush(channel)
             wave = keysightSD1.SD_Wave()
             waveformID = channel
             wave.newFromArrayDouble(0, self.waveforms[self.channels[channel]])
@@ -94,6 +95,7 @@ class DAQ:
         self.full_scale = {}
         self.points_per_cycle = points_per_cycle
         self.cycles = cycles
+        self.trigger_mode = trg.SWHVITRIG
 
     def wait_until_points_read(self, channel, points, timeout):
         t0 = time.time()
@@ -111,56 +113,69 @@ class DAQ:
             self.full_scale[c] = full_scale[n]
             self.daq.channelInputConfig(c, self.full_scale[c], impedance[n], coupling[n])
     
-    def swcapture(self, daq_mask):
+    def set_trigger_mode(self, trigger_mode, trigger_delay=0, analog_trig_chan=1, analog_trig_type=atrg.RISING_EDGE, threshold=0):
+        self.trigger_mode = trigger_mode
         for c in self.channels.keys():
-            self.daq.DAQconfig(c, self.points_per_cycle, self.cycles, 0, trg.SWHVITRIG)
+            self.daq.DAQconfig(c, self.points_per_cycle, self.cycles, trigger_delay, trigger_mode)
+            if trigger_mode == trg.ANALOGTRIG:
+                #self.daq.DAQtriggerConfig(c, trigger_mode, 0, 1)#2**(analog_trig_chan-1))
+                self.daq.DAQanalogTriggerConfig(c, 2**(analog_trig_chan-1))
+                if c == analog_trig_chan:
+                    self.daq.channelTriggerConfig(c, analog_trig_type, threshold)
+    
+    def capture(self, daq_mask):
+        data = np.zeros((len(self.channels),self.cycles*self.points_per_cycle))
         self.daq.DAQflushMultiple(daq_mask)
         self.daq.DAQstartMultiple(daq_mask)
-        data = np.zeros((len(self.channels),self.cycles,self.points_per_cycle))
-        for cycle in range(self.cycles):
-            self.daq.DAQtriggerMultiple(daq_mask)
-            for channel in self.channels.keys():
+        if self.trigger_mode == trg.SWHVITRIG:
+            for cycle in range(self.cycles):
+                self.daq.DAQtriggerMultiple(daq_mask)
                 timeout = 0.1 # 100ms
-                self.wait_until_points_read(channel, self.points_per_cycle, timeout)
-                read_timeout = 100 # 0 is inifinite
-                data[self.channels[channel], cycle] = self.daq.DAQread(channel, self.points_per_cycle, read_timeout)
+                for channel in self.channels.keys():
+                    self.wait_until_points_read(channel, self.points_per_cycle*(cycle+1), timeout)
+        # capture data
+        for channel in self.channels.keys():
+            if self.trigger_mode != trg.SWHVITRIG:
+                timeout = 0.1 # 100ms
+                self.wait_until_points_read(channel, self.points_per_cycle*self.cycles, timeout)
+            read_timeout = 100 # 0 is infinite
         self.daq.DAQstopMultiple(daq_mask)
+        for channel in self.channels.keys():
+            data[self.channels[channel]] = self.daq.DAQread(channel, self.cycles*self.points_per_cycle, read_timeout)
         return data
-    
-    def set_trigger_mode(self, channel, trigger_mode):
-        self.daq.DAQconfig(channel, self.points_per_cycle, self.cycles, 0, trigger_mode[self.channels[channel]])
 
     def stop(self):
-        self.awg.close()
+        self.daq.close()
 
 CHASSIS = 1
 
 # AWG constants
-AWG_CHANNELS = [1,2]
-AWG_DELAYS = [0,0] # delay in ns
-AWG_AMPLITUDE = [1.0, 1.0] # full scale in V
+AWG_CHANNELS = [1, 2]
+AWG_DELAYS = [0, 0] # delay in ns
+AWG_AMPLITUDE = [0.7, 0.7] # full scale in V
 AWG_BUFFER_LENGTH = 1000
 
 AWG_PULSES = [
-    [0.5, 1, 0.7, 0.2] # best (low ripple pulse) we have so far: 2.3ns FWHM
+    [0.5, 1, 0.7, 0.2], # best (low ripple pulse) we have so far: 2.3ns FWHM
     #[0.75, 1, 0.3, 0.1], # this is pretty good, moderate ripple, 1.9ns FWHM
     #[0.6, 1, 0.5, 0.1], # this is pretty good, low ripple, 2.1ns FWHM
-    #[0.7, 1, 0.4, 0.0], # also pretty good, moderate ripple
+    [0.7, 1, 0.4, 0.0] # also pretty good, moderate ripple
 ]
 
 # DAQ constants
 TSAMP = 2e-9
 DAQ_CHANNELS = [1, 2]
-DAQ_POINTS_PER_CYCLE = 500
+DAQ_POINTS_PER_CYCLE = 200
 DAQ_CYCLES = 1
 DAQ_TRIG_DELAY = 0
-DAQ_FULL_SCALE = [1, 1]
+DAQ_FULL_SCALE = [1, 1] # full scale in V
 DAQ_IMPEDANCE = [imp.AIN_IMPEDANCE_50, imp.AIN_IMPEDANCE_50]
 DAQ_COUPLING = [cpl.AIN_COUPLING_DC, cpl.AIN_COUPLING_DC]
 #DAQ_TRIG = [trg.SWHVITRIG, trg.SWHVITRIG]
 data = [
-    ((AWG_PULSES[0] + [0]*16)*3 + [0]*40)*10,
-    ([1]*48 + [0.5, 0.1, -0.1, -0.5] + [-1]*48)*10
+    ((AWG_PULSES[0] + [0]*16)*4 + [0]*20)*10,
+    ((AWG_PULSES[1] + [0]*16)*4 + [0]*20)*10
+    #([1]*98 + [0.5, 0.1, -0.1, -0.5] + [-1]*98)*5
 ]
 awg = AWG("M3202A", 1, 5, AWG_BUFFER_LENGTH)
 awg.add_channels(AWG_CHANNELS)
@@ -170,19 +185,25 @@ for n,c in enumerate(AWG_CHANNELS):
 
 daq = DAQ("M3102A", 1, 7, DAQ_POINTS_PER_CYCLE, DAQ_CYCLES)
 daq.add_channels(DAQ_CHANNELS, DAQ_FULL_SCALE, DAQ_IMPEDANCE, DAQ_COUPLING)
+daq.set_trigger_mode(trg.ANALOGTRIG, trigger_delay = DAQ_TRIG_DELAY, analog_trig_chan = 2, analog_trig_type = atrg.RISING_EDGE, threshold = 0.2)
+#daq.set_trigger_mode(trg.SWHVITRIG)
 
 awg.launch_channels(3)
-data = daq.swcapture(3)
+data = daq.capture(3)
 
 print("plotting results")
 plt.figure()
 for n,channel in enumerate(DAQ_CHANNELS):
-    for cycle in range(DAQ_CYCLES):
-        plt.plot(np.linspace(0,(DAQ_POINTS_PER_CYCLE-1)*TSAMP*1e6,DAQ_POINTS_PER_CYCLE), (data[n, cycle]/2**15)*DAQ_FULL_SCALE[n], label = f'ch{channel} - {cycle}')
+    plt.plot(np.linspace(0,(DAQ_POINTS_PER_CYCLE*DAQ_CYCLES-1)*TSAMP*1e9,DAQ_POINTS_PER_CYCLE*DAQ_CYCLES), (data[n]/2**15)*DAQ_FULL_SCALE[n], label = f'ch{channel}')
 plt.legend()
-plt.xlabel("t [us]")
+plt.xlabel("t [ns]")
 plt.ylabel("V [V]")
 plt.show()
+
+# very important to close AWG, otherwise the buffers will not get properly flushed
+awg.stop()
+daq.stop()
+
 # ----------
 # © Keysight Technologies, 2020
 # All rights reserved.
