@@ -11,6 +11,8 @@ from keysightSD1 import AIN_Impedance as imp
 from keysightSD1 import AIN_Coupling as cpl
 from keysightSD1 import SD_TriggerModes as trg
 from keysightSD1 import SD_AIN_TriggerMode as atrg
+from keysightSD1 import SD_TriggerBehaviors as trgb
+from keysightSD1 import SD_TriggerExternalSources as trgext
 
 class AWG:
 
@@ -50,7 +52,7 @@ class AWG:
     def set_buffer_contents(self, channel, data, amplitude):
         # do fine-grained (i.e. Tsamp resolution) delay adjustment, since delay parameter to AWGqueue is in multiples of 5 samples
         data_delayed = np.zeros(self.buffer_length)
-        start_idx = self.channel_delays[channel] % 5
+        start_idx = self.channel_delays[channel] % 10
         data_delayed[start_idx:] = data[:self.buffer_length-start_idx]
         self.waveforms[self.channels[channel],:] = np.array(data_delayed)
         # set up channel
@@ -68,7 +70,7 @@ class AWG:
             error = self.awg.waveformLoad(wave, waveformID, 0)
             if error < 0:
                 raise Exception(f"AWG load waveform error (channel {channel}):", error)
-            error = self.awg.AWGqueueWaveform(channel, waveformID, 0, self.channel_delays[channel]//5, 0, 0)
+            error = self.awg.AWGqueueWaveform(channel, waveformID, trg.AUTOTRIG, self.channel_delays[channel]//10, 0, 0)
             if error < 0:
                 raise Exception(f"AWG queue waveform error (channel {channel}):", error)
         # start all AWGs simultaneously
@@ -150,73 +152,63 @@ class DAQ:
 CHASSIS = 1
 
 # AWG constants
-AWG_CHANNELS = [1, 2]
-AWG_DELAYS = [0, 0] # delay in ns
-AWG_AMPLITUDE = [0.7, 0.7] # full scale in V
+AWG_CHANNELS = [1, 2, 3, 4]
+AWG_DELAYS = [0, 5, 10, 15] # delay in ns
+AWG_AMPLITUDE = [0.7, 0.7, 0.7, 0.7] # full scale in V
 AWG_BUFFER_LENGTH = 1000
 
 AWG_PULSES = [
     [0.5, 1, 0.7, 0.2], # best (low ripple pulse) we have so far: 2.3ns FWHM
-    #[0.75, 1, 0.3, 0.1], # this is pretty good, moderate ripple, 1.9ns FWHM
-    #[0.6, 1, 0.5, 0.1], # this is pretty good, low ripple, 2.1ns FWHM
+    [0.75, 1, 0.3, 0.1], # this is pretty good, moderate ripple, 1.9ns FWHM
+    [0.6, 1, 0.5, 0.1], # this is pretty good, low ripple, 2.1ns FWHM
     [0.7, 1, 0.4, 0.0] # also pretty good, moderate ripple
 ]
 
 # DAQ constants
 TSAMP = 2e-9
-DAQ_CHANNELS = [1, 2]
-DAQ_POINTS_PER_CYCLE = 200
+DAQ_CHANNELS = [1, 2, 3, 4]
+DAQ_POINTS_PER_CYCLE = 100
 DAQ_CYCLES = 1
 DAQ_TRIG_DELAY = 0
-DAQ_FULL_SCALE = [1, 1] # full scale in V
-DAQ_IMPEDANCE = [imp.AIN_IMPEDANCE_50, imp.AIN_IMPEDANCE_50]
-DAQ_COUPLING = [cpl.AIN_COUPLING_DC, cpl.AIN_COUPLING_DC]
-#DAQ_TRIG = [trg.SWHVITRIG, trg.SWHVITRIG]
-data = [
+DAQ_FULL_SCALE = [1, 1, 1, 1] # full scale in V
+DAQ_IMPEDANCE = [imp.AIN_IMPEDANCE_50, imp.AIN_IMPEDANCE_50, imp.AIN_IMPEDANCE_50, imp.AIN_IMPEDANCE_50]
+DAQ_COUPLING = [cpl.AIN_COUPLING_DC, cpl.AIN_COUPLING_DC, cpl.AIN_COUPLING_DC, cpl.AIN_COUPLING_DC]
+
+awg_data = [
     ((AWG_PULSES[0] + [0]*16)*4 + [0]*20)*10,
-    ((AWG_PULSES[1] + [0]*16)*4 + [0]*20)*10
+    ((AWG_PULSES[0] + [0]*16)*4 + [0]*20)*10,
+    ((AWG_PULSES[0] + [0]*16)*4 + [0]*20)*10,
+    ((AWG_PULSES[0] + [0]*16)*4 + [0]*20)*10
     #([1]*98 + [0.5, 0.1, -0.1, -0.5] + [-1]*98)*5
 ]
 awg = AWG("M3202A", 1, 5, AWG_BUFFER_LENGTH)
 awg.add_channels(AWG_CHANNELS)
 for n,c in enumerate(AWG_CHANNELS):
     awg.set_channel_delay(c, AWG_DELAYS[n])
-    awg.set_buffer_contents(c, data[n], AWG_AMPLITUDE[n])
+    awg.set_buffer_contents(c, awg_data[n], AWG_AMPLITUDE[n])
 
 daq = DAQ("M3102A", 1, 7, DAQ_POINTS_PER_CYCLE, DAQ_CYCLES)
 daq.add_channels(DAQ_CHANNELS, DAQ_FULL_SCALE, DAQ_IMPEDANCE, DAQ_COUPLING)
-daq.set_trigger_mode(trg.ANALOGTRIG, trigger_delay = DAQ_TRIG_DELAY, analog_trig_chan = 2, analog_trig_type = atrg.RISING_EDGE, threshold = 0.2)
-#daq.set_trigger_mode(trg.SWHVITRIG)
+#daq.set_trigger_mode(trg.ANALOGTRIG, trigger_delay = DAQ_TRIG_DELAY, analog_trig_chan = 1, analog_trig_type = atrg.RISING_EDGE, threshold = 0.2)
+daq.set_trigger_mode(trg.SWHVITRIG)
 
-awg.launch_channels(3)
-data = daq.capture(3)
+# use external trigs (for both AWG and DAQ) with PXI backplane rising edge trigger
+# then use digitizer to send a PXI trigger
+# using PXItriggerWrite(pxislot, trigger_n)
 
-print("plotting results")
-plt.figure()
-for n,channel in enumerate(DAQ_CHANNELS):
-    plt.plot(np.linspace(0,(DAQ_POINTS_PER_CYCLE*DAQ_CYCLES-1)*TSAMP*1e9,DAQ_POINTS_PER_CYCLE*DAQ_CYCLES), (data[n]/2**15)*DAQ_FULL_SCALE[n], label = f'ch{channel}')
-plt.legend()
-plt.xlabel("t [ns]")
-plt.ylabel("V [V]")
-plt.show()
+awg.launch_channels(sum(2**(c-1) for c in AWG_CHANNELS))
+daq_data = daq.capture(sum(2**(c-1) for c in DAQ_CHANNELS))
+
+#print("plotting results")
+#plt.figure()
+#for n,channel in enumerate(DAQ_CHANNELS):
+#    plt.plot(np.linspace(0,(DAQ_POINTS_PER_CYCLE*DAQ_CYCLES-1)*TSAMP*1e9,DAQ_POINTS_PER_CYCLE*DAQ_CYCLES), (daq_data[n]/2**15)*DAQ_FULL_SCALE[n], label = f'ch{channel}')
+#plt.legend()
+#plt.xlabel("t [ns]")
+#plt.ylabel("V [V]")
+#plt.show()
 
 # very important to close AWG, otherwise the buffers will not get properly flushed
+input('press any key to close')
 awg.stop()
 daq.stop()
-
-# ----------
-# © Keysight Technologies, 2020
-# All rights reserved.
-# You have a royalty-free right to use, modify, reproduce and distribute
-# this Sample Application (and/or any modified # version) in any way you find useful,
-# provided that you agree that Keysight Technologies has no warranty, obligations or liability 
-# for any Sample Application Files.
-#
-# Keysight Technologies provides programming examples for illustration only.
-# This sample program assumes that you are familiar with the programming language 
-# being demonstrated and the tools used to create and debug procedures.
-# Keysight Technologies support engineers can help explain the functionality 
-# of Keysight Technologies software components and associated commands,
-# but they will not modify these samples to provide added functionality or 
-# construct procedures to meet your specific needs.
-# ----------

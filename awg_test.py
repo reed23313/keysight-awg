@@ -12,16 +12,16 @@ CHASSIS = 1
 
 # change slot number to your value
 SLOT = 5
-#CHANNELS = [1, 2, 3]
-CHANNELS = [1, 2]
-#DELAYS = [2, 2, 0] # delay in ns
-DELAYS = [0, 0] # delay in ns
+CHANNELS = [1, 2, 3, 4]
+#CHANNELS = [1, 2]
+DELAYS = [0, 0, 0, 0] # delay in ns
+#DELAYS = [0, 0] # delay in ns
 AMPLITUDE = 1.0
 
 WAVEFORM = [
     [0.5, 1, 0.7, 0.2], # best (low ripple pulse) we have so far: 2.3ns FWHM
-    #[0.75, 1, 0.3, 0.1], # this is pretty good, moderate ripple, 1.9ns FWHM
-    #[0.6, 1, 0.5, 0.1], # this is pretty good, low ripple, 2.1ns FWHM
+    [0.75, 1, 0.3, 0.1], # this is pretty good, moderate ripple, 1.9ns FWHM
+    [0.6, 1, 0.5, 0.1], # this is pretty good, low ripple, 2.1ns FWHM
     [0.7, 1, 0.4, 0.0]
 ]
 
@@ -51,6 +51,9 @@ moduleID = module.openWithSlot(PRODUCT, CHASSIS, SLOT)
 if moduleID < 0:
     print("Module open error:", moduleID)
 else:
+    error = module.waveformFlush()
+    if error < 0:
+        print("failed to flush waveforms")
     print("Module opened:", moduleID)
     print("Module name:", module.getProductName())
     print("slot:", module.getSlot())
@@ -88,7 +91,7 @@ else:
             print(f"AWG load waveform error (channel {channel}):", error)
         else:
             print(f"AWG waveform loaded in channel {channel} successfully")
-        error = module.AWGqueueWaveform(channel, waveformID, 0, DELAYS[channel-1]//5, 0, 0)
+        error = module.AWGqueueWaveform(channel, waveformID, keysightSD1.SD_TriggerModes.AUTOTRIG, DELAYS[channel-1]//5, 0, 0)
         if error < 0:
             print(f"AWG queue waveform error (channel {channel}):", error)
         else:
@@ -101,8 +104,7 @@ else:
         print("AWG started successfully")
     # exiting...
     input("Press any key to stop AWG")
-    for channel in CHANNELS:
-        module.AWGstop(channel)
+    module.AWGstopMultiple(awg_mask)
     module.close()
     print()
     print("AOU closed")
