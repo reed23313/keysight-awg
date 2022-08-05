@@ -20,13 +20,50 @@ def waitUntilPointsRead(module, DAQchannel, totalPoints, timeOut):
         timeElapsed = time.time() - t0
 
 CHASSIS = 1
-# awg CONSTANTS
+
+class AWG(Object):
+
+    def __init__(self, model_name, chassis, slot, buffer_length):
+        self.model_name = model_name
+        self.chassis = chassis
+        self.slot = slot
+        self.awg = keysightSD1.SD_AOU()
+        resp = self.awg.openWithSlot(self.model_name, self.chassis, self.slot)
+        if resp < 0:
+            raise Exception(f"Couldn't connect to AWG {self.model_name} in slot {self.slot}")
+        self.channels = set([])
+        self.channel_delays = {}
+        self.waveforms = np.array([])
+        self.buffer_length = buffer_length
+
+    def add_channels(self, channels):
+        self.channels |= set(channels)
+        for c in channels:
+            self.channel_delays[c] = 0
+            self.waveforms = np.append(self.waveforms, np.zeros(buffer_length), axis=0)
+
+    def set_channel_delay(self, channel, delay):
+        self.channel_delays[channel] = delay
+
+    def set_buffer_length(self, buffer_length):
+        if buffer_length < self.buffer_length:
+            self.waveforms = self.waveforms[:,0:buffer_length-1]
+        else:
+            self.waveforms = np.append(self.waveforms, np.zeros(shape=(self.waveforms.shape[0],buffer_length-self.buffer_length)), axis=1)
+        
+
+# AWG constants
 AWG = ["M3202A",5]
 AWG_CHANNELS = [2]
 AWG_DELAYS = [0] # delay in ns
 AWG_AMPLITUDE = 1.0
 
-AWG_WAVEFORM = [
+awg = AWG("M3202A", 1, 5)
+awg.add_channels(AWG_CHANNELS)
+for n,c in enumerate(AWG_CHANNELS):
+    awg.set_channel_delay(c, AWG_DELAYS[n])
+
+AWG_PULSES = [
     [0.5, 1, 0.7, 0.2] # best (low ripple pulse) we have so far: 2.3ns FWHM
     #[0.75, 1, 0.3, 0.1], # this is pretty good, moderate ripple, 1.9ns FWHM
     #[0.6, 1, 0.5, 0.1], # this is pretty good, low ripple, 2.1ns FWHM
@@ -54,7 +91,7 @@ for channel in AWG_CHANNELS:
         waveform_data_list[AWG_CHANNELS.index(channel)].append(0)
     # optimal (?) fast pulse waveform with minimal ripple
     # (this seems to act like some sort of FIR filter to cancel the super ripply impulse response of analog front end in AWG)
-    waveform_data_list[AWG_CHANNELS.index(channel)] += AWG_WAVEFORM[AWG_CHANNELS.index(channel)]
+    waveform_data_list[AWG_CHANNELS.index(channel)] += AWG_PULSES[AWG_CHANNELS.index(channel)]
     # pad end of pulse with zeros
     waveform_data_list[AWG_CHANNELS.index(channel)] += [0]*(AWG_BUFFER_LENGTH - len(waveform_data_list[AWG_CHANNELS.index(channel)]))
     # store multiple pulses in buffer
