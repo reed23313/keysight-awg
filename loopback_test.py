@@ -28,6 +28,7 @@ class AWG:
         self.channel_delays = {}
         self.waveforms = np.array([])
         self.buffer_length = buffer_length
+        self.trigger_mode = trg.SWHVITRIG
 
     def add_channels(self, channels):
         for c in channels:
@@ -61,7 +62,16 @@ class AWG:
         # very important, behavior seems wonky if the AWG queue fills up
         self.awg.AWGflush(channel)
 
-    def launch_channels(self, awg_mask):
+    def set_trigger_mode(self, trigger_mode):
+        self.trigger_mode = trigger_mode
+        if trigger_mode == trg.EXTTRIG or trigger_mode == trg.EXTTRIG_CYCLE:
+            for channel in self.channels.keys():
+                sync = 0
+                error = self.awg.AWGtriggerExternalConfig(channel, trgext.TRIG_PXI, trgb.TRIGGER_RISE, sync)
+                if error < 0:
+                    raise Exception(f"AWG external trigger configuration failed (channel {channel}): {error}")
+
+    def launch_channels(self, awg_mask, num_cycles):
         for channel in self.channels.keys():
             self.awg.AWGflush(channel)
             wave = keysightSD1.SD_Wave()
@@ -69,18 +79,18 @@ class AWG:
             wave.newFromArrayDouble(0, self.waveforms[self.channels[channel]])
             error = self.awg.waveformLoad(wave, waveformID, 0)
             if error < 0:
-                raise Exception(f"AWG load waveform error (channel {channel}):", error)
-            error = self.awg.AWGqueueWaveform(channel, waveformID, trg.AUTOTRIG, self.channel_delays[channel]//10, 0, 0)
+                raise Exception(f"AWG load waveform error (channel {channel}): {error}")
+            error = self.awg.AWGqueueWaveform(channel, waveformID, self.trigger_mode, self.channel_delays[channel]//10, num_cycles, 0)
             if error < 0:
-                raise Exception(f"AWG queue waveform error (channel {channel}):", error)
+                raise Exception(f"AWG queue waveform error (channel {channel}): {error}")
         # start all AWGs simultaneously
         error = self.awg.AWGstartMultiple(awg_mask)
         if error < 0:
-            raise Exception(f"AWG start error:", error)
+            raise Exception(f"AWG start error: {error}")
 
     def stop(self):
-        for channel in self.channels.keys():
-            self.awg.AWGstop(channel)
+        self.awg.AWGstopMultiple(sum(2**(c-1) for c in self.channels.keys()))
+        time.sleep(0.1)
         self.awg.close()
 
 class DAQ:
@@ -119,34 +129,52 @@ class DAQ:
         self.trigger_mode = trigger_mode
         for c in self.channels.keys():
             self.daq.DAQconfig(c, self.points_per_cycle, self.cycles, trigger_delay, trigger_mode)
+            # analog trigger requires setting the proper mask for each channel and
+            # configuring the analog triggering condition for the analog trigger channel.
+            # a non-one-hot mask (e.g. 0011 or 0101) will trigger when any of the enabled
+            # channels in the mask meet the trigger condition as configured by channelTriggerConfig()
             if trigger_mode == trg.ANALOGTRIG:
-                #self.daq.DAQtriggerConfig(c, trigger_mode, 0, 1)#2**(analog_trig_chan-1))
                 self.daq.DAQanalogTriggerConfig(c, 2**(analog_trig_chan-1))
                 if c == analog_trig_chan:
                     self.daq.channelTriggerConfig(c, analog_trig_type, threshold)
+            if trigger_mode == trg.HWDIGTRIG:
+                self.daq.DAQdigitalTriggerConfig(c, trgext.TRIG_PXI1, trgb.TRIGGER_RISE)
     
     def capture(self, daq_mask):
         data = np.zeros((len(self.channels),self.cycles*self.points_per_cycle))
         self.daq.DAQflushMultiple(daq_mask)
         self.daq.DAQstartMultiple(daq_mask)
+        capture_timeout = 0.1 # 100ms
+        # if trigger mode is SW/HVI or PXI/EXT, then manually send a trigger for each capture cycle
         if self.trigger_mode == trg.SWHVITRIG:
             for cycle in range(self.cycles):
                 self.daq.DAQtriggerMultiple(daq_mask)
-                timeout = 0.1 # 100ms
                 for channel in self.channels.keys():
-                    self.wait_until_points_read(channel, self.points_per_cycle*(cycle+1), timeout)
+                    self.wait_until_points_read(channel, self.points_per_cycle*(cycle+1), capture_timeout)
+        if self.trigger_mode == trg.HWDIGTRIG:
+            # by default use PXI1 for everything
+            PXI1 = 1
+            for cycle in range(self.cycles):
+                # PXI triggers are active low (i.e. 0 represents a triggered state)
+                self.daq.PXItriggerWrite(PXI1, 1)
+                self.daq.PXItriggerWrite(PXI1, 0)
+                self.daq.PXItriggerWrite(PXI1, 1)
+                for channel in self.channels.keys():
+                    self.wait_until_points_read(channel, self.points_per_cycle*(cycle+1), capture_timeout)
         # capture data
         for channel in self.channels.keys():
             if self.trigger_mode != trg.SWHVITRIG:
-                timeout = 0.1 # 100ms
-                self.wait_until_points_read(channel, self.points_per_cycle*self.cycles, timeout)
-            read_timeout = 100 # 0 is infinite
+                self.wait_until_points_read(channel, self.points_per_cycle*self.cycles, capture_timeout)
         self.daq.DAQstopMultiple(daq_mask)
+        read_timeout = 100 # timeout in ms; 0 is infinite
         for channel in self.channels.keys():
             data[self.channels[channel]] = self.daq.DAQread(channel, self.cycles*self.points_per_cycle, read_timeout)
         return data
 
     def stop(self):
+        # just in case it's not stopped, stop the DAQ
+        self.daq.DAQstopMultiple(sum(2**(c-1) for c in self.channels.keys()))
+        time.sleep(0.1)
         self.daq.close()
 
 CHASSIS = 1
@@ -186,17 +214,19 @@ awg.add_channels(AWG_CHANNELS)
 for n,c in enumerate(AWG_CHANNELS):
     awg.set_channel_delay(c, AWG_DELAYS[n])
     awg.set_buffer_contents(c, awg_data[n], AWG_AMPLITUDE[n])
+awg.set_trigger_mode(trg.EXTTRIG_CYCLE)
 
 daq = DAQ("M3102A", 1, 7, DAQ_POINTS_PER_CYCLE, DAQ_CYCLES)
 daq.add_channels(DAQ_CHANNELS, DAQ_FULL_SCALE, DAQ_IMPEDANCE, DAQ_COUPLING)
 #daq.set_trigger_mode(trg.ANALOGTRIG, trigger_delay = DAQ_TRIG_DELAY, analog_trig_chan = 1, analog_trig_type = atrg.RISING_EDGE, threshold = 0.2)
-daq.set_trigger_mode(trg.SWHVITRIG)
+#daq.set_trigger_mode(trg.SWHVITRIG)
+daq.set_trigger_mode(trg.EXTTRIG)
 
 # use external trigs (for both AWG and DAQ) with PXI backplane rising edge trigger
 # then use digitizer to send a PXI trigger
 # using PXItriggerWrite(pxislot, trigger_n)
 
-awg.launch_channels(sum(2**(c-1) for c in AWG_CHANNELS))
+awg.launch_channels(sum(2**(c-1) for c in AWG_CHANNELS), DAQ_CYCLES)
 daq_data = daq.capture(sum(2**(c-1) for c in DAQ_CHANNELS))
 
 #print("plotting results")
