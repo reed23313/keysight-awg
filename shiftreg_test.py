@@ -31,19 +31,23 @@ random.seed(RAND_SEED)
 # AWG constants
 AWG_FSAMP = int(1e9) # 1GS/s
 AWG_CHANNELS = [1, 2, 3, 4]
-AWG_DELAYS = [0, 0, 3, 0] # delay in ns
+AWG_DELAYS = [0, 0, 5, 10] # delay in ns
 AWG_AMPLITUDE = [0.7, 0.7, 0.7, 0.7] # full scale in V
 
 # DAQ constants
 DAQ_FSAMP = int(500e6) # 500MS/s
 DAQ_CHANNELS = [1, 2, 3, 4]
-DAQ_TRIG_DELAY = 184 # set the delay until capturing samples from when the trigger condition is met
+# set the delay until capturing samples from when the trigger condition is met
+# 184 samples seems to be an intrinsic delay between when the DAQ and AWG start given the PXI bus trigger from the DAQ
+# -1000 samples is used so that the peak finding algorithm can get an estimate of the noise level of each channel
+DAQ_NOISE_CAL_BUFFER_LENGTH = 1000
+DAQ_TRIG_DELAY = 184 - DAQ_NOISE_CAL_BUFFER_LENGTH
 DAQ_FULL_SCALE = [1, 1, 1, 1] # full scale in V
 DAQ_IMPEDANCE = [imp.AIN_IMPEDANCE_50, imp.AIN_IMPEDANCE_50, imp.AIN_IMPEDANCE_50, imp.AIN_IMPEDANCE_50]
 DAQ_COUPLING = [cpl.AIN_COUPLING_DC, cpl.AIN_COUPLING_DC, cpl.AIN_COUPLING_DC, cpl.AIN_COUPLING_DC]
 
 def make_word(value, bits, pulse, freq, fs):
-    period_samples = int(fs/freq)
+    period_samples = int(fs)//int(freq)
     if len(pulse) > period_samples:
         raise ValueError(f"frequency {freq} is too high for the selected pulse length of {len(pulse)} at sample rate {fs}")
     word = []
@@ -100,6 +104,8 @@ daq.set_trigger_mode(trg.EXTTRIG, trigger_delay = DAQ_TRIG_DELAY)
 try:
     awg.launch_channels(sum(2**(c-1) for c in AWG_CHANNELS), TEST_CYCLES)
     daq_data = daq.capture(sum(2**(c-1) for c in DAQ_CHANNELS))
+    for n in range(len(DAQ_CHANNELS)):
+        daq_data[n] = (daq_data[n]/2**15)*DAQ_FULL_SCALE[n]
 except Exception as e:
     print(e)
     awg.stop()
@@ -113,19 +119,28 @@ daq.stop()
 if PLOT_RESULTS:
     print("plotting results")
     plt.figure()
-    tvec = np.linspace(0,(DAQ_BUFFER_SIZE*TEST_CYCLES-1)/DAQ_FSAMP*1e9,DAQ_BUFFER_SIZE*TEST_CYCLES)
+    t_units = 1e-6
+    siprefix = {
+        1e-24:'y', 1e-21:'z', 1e-18:'a', 1e-15:'f', 1e-12:'p', 1e-9:'n',
+        1e-6:'u', 1e-3:'m', 1e-2:'c', 1e-1:'d', 1e3:'k', 1e6:'M', 1e9:'G',
+        1e12:'T', 1e15:'P', 1e18:'E', 1e21:'Z', 1e24:'Y'
+    }
+    tvec = np.linspace(0,(DAQ_BUFFER_SIZE*TEST_CYCLES-1)/DAQ_FSAMP/t_units,DAQ_BUFFER_SIZE*TEST_CYCLES)
+    tvec = tvec - DAQ_NOISE_CAL_BUFFER_LENGTH/DAQ_FSAMP/t_units
     colors = list(mcolors.TABLEAU_COLORS.keys())
     for n,channel in enumerate(DAQ_CHANNELS):
         # do peak finding on channel data and calculate bit error rate
-        print(f'standard deviation: {np.std(daq_data[n])}')
-        print(f'rms_est (assuming sinusoid): {np.quantile(daq_data[n])}')
-        threshold = 3*np.std(daq_data[n])
-        peaks, _ = sigproc.find_peaks(daq_data[n], height=3*np.std(daq_data[n]), distance=4)
-        # if std-dev is comparable (i.e. within a factor of 2) to (Q(0.95)-Q(0.05))/sqrt(2)
-        # in case pattern is very dense
-        plt.plot(tvec, n + (daq_data[n]/2**15)*DAQ_FULL_SCALE[n], label = f'ch{channel}', color=colors[n])
-        plt.plot(tvec[peaks], n + (daq_data[n][peaks]/2**15)*DAQ_FULL_SCALE[n], "x", color=colors[n])
+        # use first 1000 samples, since they are going to be all zero based on the delay
+        # zscore reflects the SNR of the readout circuit --- 500 is suitable for loopback,
+        # but most likely a lower threshold (e.g. 5sigma) is needed for a real test
+        zscore = 50
+        threshold = zscore*np.std(daq_data[n,:1000])
+        distance = int(0.8*(DAQ_FSAMP/BIT_RATE))
+        peaks, _ = sigproc.find_peaks(daq_data[n], height=threshold, distance=distance)
+        # calculate bit error rate based on peaks
+        plt.plot(tvec, n + daq_data[n], label = f'ch{channel}', color=colors[n])
+        plt.plot(tvec[peaks], n + daq_data[n][peaks], "x", color=colors[n])
     plt.legend()
-    plt.xlabel("t [ns]")
+    plt.xlabel(f"t [{siprefix[t_units]}s]")
     plt.ylabel("V [V]")
     plt.show()
