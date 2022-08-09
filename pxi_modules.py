@@ -53,6 +53,8 @@ class AWG:
         # so instead, we'll just set the delay in samples here
         start_idx = self.channel_delays[channel]
         data_delayed[start_idx:] = data[:self.buffer_length-start_idx]
+        if np.max(np.abs(data_delayed)) > 1:
+            raise Exception(f"AWG buffer contents in channel ({channel}) cannot exceed |1| full scale")
         self.waveforms[self.channels[channel],:] = np.array(data_delayed)
         # set up channel
         self.awg.channelWaveShape(channel, keysightSD1.SD_Waveshapes.AOU_AWG)
@@ -74,7 +76,9 @@ class AWG:
             self.awg.AWGflush(channel)
             wave = keysightSD1.SD_Wave()
             waveformID = channel
-            wave.newFromArrayDouble(0, self.waveforms[self.channels[channel]])
+            error = wave.newFromArrayDouble(0, self.waveforms[self.channels[channel]])
+            if error < 0:
+                raise Exception(f"AWG create waveform error (channel {channel}): {error}")
             error = self.awg.waveformLoad(wave, waveformID, 0)
             if error < 0:
                 raise Exception(f"AWG load waveform error (channel {channel}): {error}")
