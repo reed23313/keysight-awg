@@ -9,6 +9,9 @@ from keysightSD1 import SD_AIN_TriggerMode as atrg
 from keysightSD1 import SD_TriggerBehaviors as trgb
 from keysightSD1 import SD_TriggerExternalSources as trgext
 
+class KeysightException(Exception):
+    pass
+
 class AWG:
 
     def __init__(self, model_name, chassis, slot, buffer_length):
@@ -18,7 +21,7 @@ class AWG:
         self.awg = keysightSD1.SD_AOU()
         resp = self.awg.openWithSlot(self.model_name, self.chassis, self.slot)
         if resp < 0:
-            raise Exception(f"Couldn't connect to AWG {self.model_name} in slot {self.slot}")
+            raise KeysightException(f"Couldn't connect to AWG {self.model_name} in slot {self.slot}")
         self.channels = {}
         self.channel_delays = {}
         self.waveforms = np.array([])
@@ -45,7 +48,7 @@ class AWG:
             self.waveforms = np.append(self.waveforms, np.zeros(shape=(self.waveforms.shape[0],buffer_length-self.buffer_length)), axis=1)
         self.buffer_length = buffer_length
     
-    def set_buffer_contents(self, channel, data, amplitude):
+    def set_buffer_contents(self, channel, data):
         # do fine-grained (i.e. Tsamp resolution) delay adjustment, since delay parameter to AWGqueue is in multiples of 10 samples
         data_delayed = np.zeros(self.buffer_length)
         #start_idx = self.channel_delays[channel] % 10
@@ -54,13 +57,15 @@ class AWG:
         start_idx = self.channel_delays[channel]
         data_delayed[start_idx:] = data[:self.buffer_length-start_idx]
         if np.max(np.abs(data_delayed)) > 1:
-            raise Exception(f"AWG buffer contents in channel ({channel}) cannot exceed |1| full scale")
+            raise KeysightException(f"AWG buffer contents in channel ({channel}) cannot exceed |1| full scale")
         self.waveforms[self.channels[channel],:] = np.array(data_delayed)
         # set up channel
         self.awg.channelWaveShape(channel, keysightSD1.SD_Waveshapes.AOU_AWG)
-        self.awg.channelAmplitude(channel, amplitude)
         # very important, behavior seems wonky if the AWG queue fills up
         self.awg.AWGflush(channel)
+    
+    def set_channel_amplitude(self, channel, amplitude):
+        self.awg.channelAmplitude(channel, amplitude)
 
     def set_trigger_mode(self, trigger_mode):
         self.trigger_mode = trigger_mode
@@ -69,7 +74,7 @@ class AWG:
                 sync = 0
                 error = self.awg.AWGtriggerExternalConfig(channel, trgext.TRIGGER_PXI, trgb.TRIGGER_RISE, sync)
                 if error < 0:
-                    raise Exception(f"AWG external trigger configuration failed (channel {channel}): {error}")
+                    raise KeysightException(f"AWG external trigger configuration failed (channel {channel}): {error}")
 
     def launch_channels(self, awg_mask, num_cycles):
         for channel in self.channels.keys():
@@ -78,19 +83,19 @@ class AWG:
             waveformID = channel
             error = wave.newFromArrayDouble(0, self.waveforms[self.channels[channel]])
             if error < 0:
-                raise Exception(f"AWG create waveform error (channel {channel}): {error}")
+                raise KeysightException(f"AWG create waveform error (channel {channel}): {error}")
             error = self.awg.waveformLoad(wave, waveformID, 0)
             if error < 0:
-                raise Exception(f"AWG load waveform error (channel {channel}): {error}")
+                raise KeysightException(f"AWG load waveform error (channel {channel}): {error}")
             # setting the delay in the AWGqueueWaveform method actually doesn't work properly when queuing multiple cycles
             #error = self.awg.AWGqueueWaveform(channel, waveformID, self.trigger_mode, self.channel_delays[channel]//10, num_cycles, 0)
             error = self.awg.AWGqueueWaveform(channel, waveformID, self.trigger_mode, 0, num_cycles, 0)
             if error < 0:
-                raise Exception(f"AWG queue waveform error (channel {channel}): {error}")
+                raise KeysightException(f"AWG queue waveform error (channel {channel}): {error}")
         # start all AWGs simultaneously
         error = self.awg.AWGstartMultiple(awg_mask)
         if error < 0:
-            raise Exception(f"AWG start error: {error}")
+            raise KeysightException(f"AWG start error: {error}")
 
     def stop(self):
         self.awg.AWGstopMultiple(sum(2**(c-1) for c in self.channels.keys()))
@@ -106,7 +111,7 @@ class DAQ:
         self.daq = keysightSD1.SD_AIN()
         resp = self.daq.openWithSlot(self.model_name, self.chassis, self.slot)
         if resp < 0:
-            raise Exception(f"Couldn't connect to DAQ {self.model_name} in slot {self.slot}")
+            raise KeysightException(f"Couldn't connect to DAQ {self.model_name} in slot {self.slot}")
         self.channels = {}
         self.full_scale = {}
         self.points_per_cycle = points_per_cycle

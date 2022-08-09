@@ -2,8 +2,7 @@
 # It allows for synchronous capture of a device's response given an arbitrary stimulus
 # channels 1 and 2 emulate ntron/SNSPD pulses
 # pulse height of SNSPD waveforms is inconsistent
-# this is mostly due to 500MS/s digitizer,
-# although some deviation in pulse height is introduced by the AWG running at 1GS/s
+# this is mostly due to the low sample rate of the 500MS/s digitizer
 # ----------
 
 import sys
@@ -13,6 +12,8 @@ import numpy as np
 import pxi_modules
 import scipy.io as sio
 import scipy.signal as sigproc
+
+from pulse_lib import *
 
 sys.path.append('C:\Program Files (x86)\Keysight\SD1\Libraries\Python')
 from keysightSD1 import AIN_Impedance as imp
@@ -28,18 +29,6 @@ AWG_CHANNELS = [1, 2, 3, 4]
 AWG_DELAYS = [0, 0, 0, 0] # delay in ns
 AWG_AMPLITUDE = [0.7, 0.7, 0.7, 0.7] # full scale in V
 AWG_BUFFER_LENGTH = 1000 # number of samples to hold in buffer
-
-AWG_SHORT_PULSES = [
-    [0.5, 1, 0.7, 0.2], # best (low ripple pulse) we have so far: 2.3ns FWHM
-    [0.75, 1, 0.3, 0.1], # this is pretty good, moderate ripple, 1.9ns FWHM
-    [0.6, 1, 0.5, 0.1], # this is pretty good, low ripple, 2.1ns FWHM
-    [0.7, 1, 0.4, 0.0] # also pretty good, moderate ripple
-]
-
-AWG_LONG_PULSES = [
-    [0.0, 0.0, 0.1, 0.3, 0.5, 0.7, 0.9, 1, 1, 1, 1, 1, 1, 0.9, 0.7, 0.5, 0.3, 0.1, 0.0, 0.0] # ~11ns FWHM, ~5ns t_on, no ripple
-    #[0.1, 0.3, 0.5, 0.7, 1, 1, 1, 1, 1, 1, 1, 0.7, 0.5, 0.3, 0.1]
-]
 
 # DAQ constants
 DAQ_TSAMP = 2e-9 # 500MS/s
@@ -61,10 +50,10 @@ c4 = c4_full_bw[::10] # downsample 10x to go from 10GS/s to 1GS/s
 awg_data = [
     c3,
     c4,
-    #((AWG_LONG_PULSES[0] + [0]*25)*4 + [0]*20)*2 + [0]*100,
-    #((AWG_LONG_PULSES[0] + [0]*25)*4 + [0]*20)*2 + [0]*100,
-    ((AWG_LONG_PULSES[0] + [0]*25)*4 + [0]*20)*4 + [0]*200,
-    ((AWG_LONG_PULSES[0] + [0]*25)*4 + [0]*20)*4 + [0]*200
+    #((AWG_LONG_PULSE + [0]*25)*4 + [0]*20)*2 + [0]*100,
+    #((AWG_LONG_PULSE + [0]*25)*4 + [0]*20)*2 + [0]*100,
+    ((AWG_LONG_PULSE + [0]*29)*4 + [0]*20)*4 + [0]*200,
+    ((AWG_LONG_PULSE + [0]*29)*4 + [0]*20)*4 + [0]*200
     #([1]*98 + [0.5, 0.1, -0.1, -0.5] + [-1]*98)*5
 ]
 
@@ -73,6 +62,7 @@ awg = pxi_modules.AWG("M3202A", 1, 5, AWG_BUFFER_LENGTH)
 awg.add_channels(AWG_CHANNELS)
 for n,c in enumerate(AWG_CHANNELS):
     awg.set_channel_delay(c, AWG_DELAYS[n])
+    awg.set_channel_amplitude(c, AWG_AMPLITUDE[n])
     awg.set_buffer_contents(c, awg_data[n], AWG_AMPLITUDE[n])
 
 daq = pxi_modules.DAQ("M3102A", 1, 7, DAQ_POINTS_PER_CYCLE, DAQ_CYCLES)
@@ -130,8 +120,8 @@ for n,channel in enumerate(DAQ_CHANNELS):
 axs[0].legend()
 axs[0].set_xlabel("t [ns]")
 axs[0].set_ylabel("V [V]")
-axs[1].plot(np.linspace(0,1e9*AWG_BUFFER_LENGTH*AWG_TSAMP*0.1,10*AWG_BUFFER_LENGTH), c3_full_bw, label = 'c3')
-axs[1].plot(np.linspace(0,1e9*AWG_BUFFER_LENGTH*AWG_TSAMP*0.1,10*AWG_BUFFER_LENGTH), c4_full_bw, label = 'c4')
+axs[1].plot(np.linspace(0,1e9*10*AWG_BUFFER_LENGTH*0.1*AWG_TSAMP,10*AWG_BUFFER_LENGTH), c3_full_bw, label = 'c3')
+axs[1].plot(np.linspace(0,1e9*10*AWG_BUFFER_LENGTH*0.1*AWG_TSAMP,10*AWG_BUFFER_LENGTH), c4_full_bw, label = 'c4')
 axs[1].legend()
 axs[1].set_xlabel("t [ns]")
 axs[1].set_ylabel("V [V]")
