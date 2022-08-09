@@ -1,13 +1,18 @@
 # This program has been adapted from Keysight's SD1 docs
 # It allows for synchronous capture of a device's response given an arbitrary stimulus
 # channels 1 and 2 emulate ntron/SNSPD pulses
+# pulse height of SNSPD waveforms is inconsistent
+# this is mostly due to 500MS/s digitizer,
+# although some deviation in pulse height is introduced by the AWG running at 1GS/s
 # ----------
 
 import sys
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import numpy as np
 import pxi_modules
 import scipy.io as sio
+import scipy.signal as sigproc
 
 sys.path.append('C:\Program Files (x86)\Keysight\SD1\Libraries\Python')
 from keysightSD1 import AIN_Impedance as imp
@@ -38,7 +43,7 @@ AWG_LONG_PULSES = [
 
 # DAQ constants
 DAQ_TSAMP = 2e-9 # 500MS/s
-DAQ_CHANNELS = [1, 2, 3, 4]
+DAQ_CHANNELS = [1, 2]
 DAQ_POINTS_PER_CYCLE = 500 # number of samples in a single acquisition cycle/frame
 DAQ_CYCLES = 1 # number of acquisition cycles/frames
 DAQ_TRIG_DELAY = 180 # set the delay until capturing samples from when the trigger condition is met
@@ -112,12 +117,16 @@ print("closing AWG and DAQ")
 awg.stop()
 daq.stop()
 
+
 print("plotting results")
 fig, axs = plt.subplots(2,1)
+tvec = np.linspace(0,(DAQ_POINTS_PER_CYCLE*DAQ_CYCLES-1)*DAQ_TSAMP*1e9,DAQ_POINTS_PER_CYCLE*DAQ_CYCLES)
+colors = list(mcolors.TABLEAU_COLORS.keys())
 for n,channel in enumerate(DAQ_CHANNELS):
-    if n > 1:
-        break
-    axs[0].plot(np.linspace(0,(DAQ_POINTS_PER_CYCLE*DAQ_CYCLES-1)*DAQ_TSAMP*1e9,DAQ_POINTS_PER_CYCLE*DAQ_CYCLES), (daq_data[n]/2**15)*DAQ_FULL_SCALE[n], label = f'ch{channel}')
+    # do peak finding on SNSPD data
+    peaks, _ = sigproc.find_peaks(daq_data[n], height=3*np.std(daq_data[n]), distance=4)
+    axs[0].plot(tvec, (daq_data[n]/2**15)*DAQ_FULL_SCALE[n], label = f'ch{channel}', color=colors[n])
+    axs[0].plot(tvec[peaks], (daq_data[n][peaks]/2**15)*DAQ_FULL_SCALE[n], "x", color=colors[n])
 axs[0].legend()
 axs[0].set_xlabel("t [ns]")
 axs[0].set_ylabel("V [V]")
