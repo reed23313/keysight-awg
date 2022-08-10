@@ -12,6 +12,8 @@ from pulse_lib import *
 RAND_SEED = None # if None, use current system time as random seed
 random.seed(RAND_SEED)
 
+PLOT_RESULTS = False
+
 AWG_FSAMP = int(1e9) # 1GS/s
 DAQ_FSAMP = int(500e6) # 500MS/s
 
@@ -32,7 +34,7 @@ def make_word(value, bits, pulse, freq, fs):
 
 TEST_CYCLES = 1
 WORD_SIZE = 8
-NUM_WORDS = 25
+NUM_WORDS = 125000
 BIT_RATE = int(100e6) # sym/s (maybe up to 150MHz; 100MHz looks good however)
 AWG_BUFFER_SIZE = NUM_WORDS*WORD_SIZE*(AWG_FSAMP//BIT_RATE)
 DAQ_BUFFER_SIZE = NUM_WORDS*WORD_SIZE*(DAQ_FSAMP//BIT_RATE)
@@ -44,7 +46,9 @@ daq_data = np.zeros(DAQ_BUFFER_SIZE + daq_data_offset)
 
 snspd_pulse = sio.loadmat('csvs/SPG717_sr2loop_noinput_clk1_shunt123_ntron_shiftreg_2loop_no_input_2022-05-17 17-33-06.mat')['C4y'][1,3500:3700]
 
-BER = 0.01
+BER = 0.05
+
+BER = min(BER, 0.5)
 
 bits = np.zeros(NUM_WORDS*WORD_SIZE)
 
@@ -74,7 +78,6 @@ daq_data = daq_data[:DAQ_BUFFER_SIZE]
 # make sure we've created the buffers properly
 assert len(input_signal) == AWG_BUFFER_SIZE
 
-print("plotting results")
 t_units = 1e-9
 siprefix = {
     1e-24:'y', 1e-21:'z', 1e-18:'a', 1e-15:'f', 1e-12:'p', 1e-9:'n',
@@ -85,10 +88,8 @@ tvec_daq = np.linspace(0,(DAQ_BUFFER_SIZE*TEST_CYCLES-1)/DAQ_FSAMP/t_units,DAQ_B
 tvec_awg = np.linspace(0,(AWG_BUFFER_SIZE*TEST_CYCLES-1)/AWG_FSAMP/t_units,AWG_BUFFER_SIZE*TEST_CYCLES)
 colors = list(mcolors.TABLEAU_COLORS.keys())
 
-# find peaks in signal
+# set threshold for deciding whether or not a pulse/spike is present
 threshold = 0.3*max(daq_data)
-distance = int(0.8*(DAQ_FSAMP/BIT_RATE))
-peaks, _ = sigproc.find_peaks(daq_data, height=threshold, distance=distance)
 
 # get cross correlation between daq data and 2x decimated awg signal to help with alignment for BER calc
 corr = sigproc.correlate(daq_data, input_signal[::2])
@@ -99,6 +100,8 @@ daq_data_delayed = np.zeros(DAQ_BUFFER_SIZE)
 if best_lag > 0:
     daq_data_delayed[:len(daq_data)-best_lag] = daq_data[best_lag:]
 else:
+    print("WARNING: got unphysical optimal lag, BER rate estimate should be set to >0.5")
+    best_lag = -best_lag
     daq_data_delayed[best_lag:] = daq_data[:len(daq_data)-best_lag]
 
 one_to_zero = 0
@@ -111,31 +114,34 @@ for bit in range(WORD_SIZE*NUM_WORDS):
         # make sure that there wasn't a 1 -> 0 error
         # check that there's a peak in the vicinity
         if max(daq_data_delayed[search_min:search_max]) < threshold:
-            print("1->0 error at t = ", tvec_daq[search_min + np.argmax(daq_data_delayed[search_min:search_max])])
+            #print("1->0 error at t = ", tvec_daq[search_min + np.argmax(daq_data_delayed[search_min:search_max])])
             one_to_zero += 1
     else:
         # make sure there wasn't a 0 -> 1 error
         # check that there aren't any peaks in the vicinity
         if max(daq_data_delayed[search_min:search_max]) > threshold:
-            print("0->1 error at t = ", tvec_daq[search_min + np.argmax(daq_data_delayed[search_min:search_max])])
+            #print("0->1 error at t = ", tvec_daq[search_min + np.argmax(daq_data_delayed[search_min:search_max])])
             zero_to_one += 1
-
-fig, axs = plt.subplots(3,1)
-axs[0].plot(tvec_daq, daq_data, label = 'daq data', color=colors[0])
-axs[0].plot(tvec_daq[peaks], daq_data[peaks], "x", color=colors[0])
-axs[0].plot(tvec_awg, input_signal, label = 'awg output', color=colors[1])
-axs[0].legend()
-axs[0].set_xlabel(f"t [{siprefix[t_units]}s]")
-axs[0].set_ylabel("V [V]")
-axs[1].plot(lags/DAQ_FSAMP/t_units, corr)
-axs[1].set_xlabel(f"t [{siprefix[t_units]}s]")
-axs[2].plot(tvec_daq, daq_data_delayed, label = 'daq data', color=colors[0])
-axs[2].plot(tvec_daq, input_signal[::2], label = 'awg output', color=colors[1])
-axs[2].plot(np.linspace(0,(WORD_SIZE*NUM_WORDS-1)/BIT_RATE/t_units,WORD_SIZE*NUM_WORDS), 0.6*bits, '.', label = 'bits', color=colors[2])
-axs[2].legend()
-axs[2].set_xlabel(f"t [{siprefix[t_units]}s]")
-axs[2].set_ylabel("V [V]")
-print(one_to_zero, " 1->0 errors")
-print(zero_to_one, " 0->1 errors")
+print("num(1->0 errors) = ", one_to_zero)
+print("num(1->0 errors) = ", zero_to_one)
 print("BER = ", (one_to_zero + zero_to_one)/(WORD_SIZE*NUM_WORDS))
-plt.show()
+
+if PLOT_RESULTS:
+    print("plotting results")
+    fig, axs = plt.subplots(3,1)
+    axs[0].plot(tvec_daq, daq_data, label = 'daq data', color=colors[0])
+    axs[0].plot(tvec_daq[peaks], daq_data[peaks], "x", color=colors[0])
+    axs[0].plot(tvec_awg, input_signal, label = 'awg output', color=colors[1])
+    axs[0].legend()
+    axs[0].set_xlabel(f"t [{siprefix[t_units]}s]")
+    axs[0].set_ylabel("V [V]")
+    axs[1].plot(lags/DAQ_FSAMP/t_units, corr, label = "corr(daq_data, awg_data)", color=colors[0])
+    axs[1].legend()
+    axs[1].set_xlabel(f"t [{siprefix[t_units]}s]")
+    axs[2].plot(tvec_daq, daq_data_delayed, label = 'daq data', color=colors[0])
+    axs[2].plot(tvec_daq, input_signal[::2], label = 'awg output', color=colors[1])
+    axs[2].plot(np.linspace(0,(WORD_SIZE*NUM_WORDS-1)/BIT_RATE/t_units,WORD_SIZE*NUM_WORDS), 0.6*bits, '.', label = 'bits', color=colors[2])
+    axs[2].legend()
+    axs[2].set_xlabel(f"t [{siprefix[t_units]}s]")
+    axs[2].set_ylabel("V [V]")
+    plt.show()
