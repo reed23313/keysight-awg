@@ -111,7 +111,7 @@ def make_word(value, bits, pulse, freq, fs):
     return word
 
 # test vector parameters
-# BER calculation takes roughly 1.5s per channel per 100Msamp
+# BER calculation takes roughly 120ms per channel per 1Msamp
 if DEBUG_OPTIMAL_AMPLITUDES:
     TEST_CYCLES = 1
 else:
