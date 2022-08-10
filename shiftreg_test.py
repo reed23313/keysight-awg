@@ -27,14 +27,31 @@ from keysightSD1 import SD_TriggerModes as trg
 # use AWG to mimic SNSPD pulse
 snspd_pulse = sio.loadmat('csvs/SPG717_sr2loop_noinput_clk1_shunt123_ntron_shiftreg_2loop_no_input_2022-05-17 17-33-06.mat')['C4y'][1,3500:3700]
 
+# make plots nicer
+t_units = 1e-9
+siprefix = {
+    1e-24:'y', 1e-21:'z', 1e-18:'a', 1e-15:'f', 1e-12:'p', 1e-9:'n',
+    1e-6:'u', 1e-3:'m', 1e-2:'c', 1e-1:'d', 1e3:'k', 1e6:'M', 1e9:'G',
+    1e12:'T', 1e15:'P', 1e18:'E', 1e21:'Z', 1e24:'Y'
+}
+
+# custom exception class for lag calculation
+class LagException(Exception):
+    pass
+
 CHASSIS = 1
+
+# debug options
 PLOT_RESULTS = False
+DEBUG_OPTIMAL_AMPLITUDES = False
+DEBUG_DELAY_CALC = True
 DEBUG_BER_CHECKER = True
 DEBUG_BER_PLOT = False
 DEBUG_BER = 0.01
-RAND_SEED = None # if None, use current system time as random seed
+RAND_SEED = 1000*((ord('S')*256 + ord('P'))*256 + ord('G')) + 717 # if None, use current system time as random seed
 random.seed(RAND_SEED)
 
+# clock amplitude sweeps
 # will need an amplifier going into cryostat since AWG can only do +/-1.5V
 # likely will want voltages in the range of 0.5-5V
 # 25dB amplifier and 10dB attenuator should be good (voltage gain of 5.6)
@@ -47,7 +64,10 @@ V_INPUT_SWEEP = np.linspace(0.7, 1.5, N_VINPUT)
 V_CLKIN_SWEEP = np.linspace(0.7, 1.5, N_VCLKIN)
 V_CLKSH_SWEEP = np.linspace(0.7, 1.5, N_VCLKSH)
 V_CLKRO_SWEEP = np.linspace(0.7, 1.5, N_VCLKRO)
+# Vinput, Vclkin, Vclksh, Vclkro
+AWG_OPTIMAL_AMPLITUDES = [0.5, 0.5, 0.5, 0.8]
 
+# generate configs
 N_CONFIGS = N_VINPUT*N_VCLKIN*N_VCLKSH*N_VCLKRO
 TEST_CONFIGURATIONS = np.zeros((N_CONFIGS,4))
 i = 0
@@ -66,12 +86,10 @@ AWG_AMPLITUDE = [0.7, 0.7, 0.7, 0.7] # full scale in V
 
 # DAQ constants
 DAQ_FSAMP = int(500e6) # 500MS/s
-DAQ_CHANNELS = [1, 2, 3, 4]
+DAQ_CHANNELS = [1, 2, 3]
 # set the delay until capturing samples from when the trigger condition is met
 # 184 samples seems to be an intrinsic delay between when the DAQ and AWG start given the PXI bus trigger from the DAQ
-# -1000 samples is used so that the peak finding algorithm can get an estimate of the noise level of each channel
-DAQ_NOISE_CAL_BUFFER_LENGTH = 0#1000
-DAQ_TRIG_DELAY = 184 - DAQ_NOISE_CAL_BUFFER_LENGTH
+DAQ_TRIG_DELAY = 184
 DAQ_FULL_SCALE = [1, 1, 1, 1] # full scale in V
 DAQ_IMPEDANCE = [imp.AIN_IMPEDANCE_50, imp.AIN_IMPEDANCE_50, imp.AIN_IMPEDANCE_50, imp.AIN_IMPEDANCE_50]
 DAQ_COUPLING = [cpl.AIN_COUPLING_DC, cpl.AIN_COUPLING_DC, cpl.AIN_COUPLING_DC, cpl.AIN_COUPLING_DC]
@@ -91,7 +109,8 @@ def make_word(value, bits, pulse, freq, fs):
         value >>= 1
     return word
 
-# test parameters
+# test vector parameters
+# BER calculation takes roughly 1.5s per channel per 100Msamp
 TEST_CYCLES = 100
 SYMS_PER_WORD = 8
 NUM_WORDS = 1250 # should be suitably large enough so that we get good word entropy
@@ -99,7 +118,7 @@ BIT_RATE = int(100e6) # sym/s (maybe up to 150MHz; 100MHz looks good however)
 AWG_WORD_SIZE = SYMS_PER_WORD*(AWG_FSAMP//BIT_RATE)
 DAQ_WORD_SIZE = SYMS_PER_WORD*(DAQ_FSAMP//BIT_RATE)
 AWG_BUFFER_SIZE = NUM_WORDS*AWG_WORD_SIZE
-DAQ_BUFFER_SIZE = NUM_WORDS*DAQ_WORD_SIZE + DAQ_NOISE_CAL_BUFFER_LENGTH
+DAQ_BUFFER_SIZE = NUM_WORDS*DAQ_WORD_SIZE
 input_signal = np.zeros(AWG_BUFFER_SIZE)
 error_signal = np.zeros(AWG_BUFFER_SIZE) # generate copy of input signal with some errors based on DEBUG_BER
 clock_signal = np.zeros(AWG_BUFFER_SIZE)
@@ -136,19 +155,20 @@ daq.set_trigger_mode(trg.EXTTRIG, trigger_delay = DAQ_TRIG_DELAY)
 
 noise_stddev = np.zeros(len(DAQ_CHANNELS))
 noise_maxabs = np.zeros(len(DAQ_CHANNELS))
+lags = np.zeros(len(DAQ_CHANNELS), dtype=np.int32)
 
 # first send a bunch of zeros to check noise level on DAQ inputs
-daq.set_capture_cycles(1)
-for c in AWG_CHANNELS:
-    # set capture sizes and cycle counts so we don't gather too much data
-    # weird bugs happen when changing the DAQ capture points,
-    # so just decrease the number of capture cycles
-    # set delays and amplitudes to zero; we don't want to send any data
-    awg.set_channel_delay(c, 0)
-    awg.set_channel_amplitude(c, 0)
-    awg.set_buffer_contents(c, np.zeros(AWG_BUFFER_SIZE))
-# actually capture noise data
 try:
+    daq.set_capture_cycles(1)
+    for c in AWG_CHANNELS:
+        # set capture sizes and cycle counts so we don't gather too much data
+        # weird bugs happen when changing the DAQ capture points,
+        # so just decrease the number of capture cycles
+        # set delays and amplitudes to zero; we don't want to send any data
+        awg.set_channel_delay(c, 0)
+        awg.set_channel_amplitude(c, 0)
+        awg.set_buffer_contents(c, np.zeros(AWG_BUFFER_SIZE))
+    # actually capture noise data
     awg.launch_channels(sum(2**(c-1) for c in AWG_CHANNELS), 1)
     daq_data = daq.capture(sum(2**(c-1) for c in DAQ_CHANNELS))
     # unit conversion to V and get noise properties
@@ -156,15 +176,63 @@ try:
         daq_data[n] = (daq_data[n]/2**15)*DAQ_FULL_SCALE[n]
         noise_stddev[n] = np.std(daq_data[n])
         noise_maxabs[n] = np.max(np.abs(daq_data[n]))
+    # send random data to figure out lags for each channel
+    for n,c in enumerate(AWG_CHANNELS):
+        awg.set_channel_delay(c, AWG_DELAYS[n])
+        awg.set_channel_amplitude(c, AWG_OPTIMAL_AMPLITUDES[n])
+        if c == 1:
+            awg.set_buffer_contents(c, input_signal)
+        else:
+            if DEBUG_DELAY_CALC:
+                awg.set_buffer_contents(c, error_signal)
+            else:
+                awg.set_buffer_contents(c, clock_signal)
+    # capture lag data
+    awg.launch_channels(sum(2**(c-1) for c in AWG_CHANNELS), 1)
+    daq_data = daq.capture(sum(2**(c-1) for c in DAQ_CHANNELS))
+    for n in range(len(DAQ_CHANNELS)):
+        # unit conversion to V
+        daq_data[n] = (daq_data[n]/2**15)*DAQ_FULL_SCALE[n]
+        # get cross correlation between daq data and 2x decimated awg signal to help with alignment for BER calc
+        corr = sigproc.correlate(daq_data[n], input_signal[::2])
+        corr_lags = sigproc.correlation_lags(len(daq_data[n]), len(input_signal[::2]))
+        lags[n] = corr_lags[np.argmax(corr)]
+        if lags[n] < 0:
+            #raise LagException("WARNING: got unphysical optimal lag, BER rate estimate has been set to 1 (indicating > 0.5 BER)")
+            print(f"WARNING: got unphysical optimal lag on channel {n+1}, BER rate estimate has been set to 1 (indicating > 0.5 BER)")
+    if DEBUG_OPTIMAL_AMPLITUDES or DEBUG_DELAY_CALC:
+        # plot AWG and DAQ data
+        tvec_daq = np.linspace(0,(DAQ_BUFFER_SIZE-1)/DAQ_FSAMP,DAQ_BUFFER_SIZE)
+        tvec_awg = np.linspace(0,(AWG_BUFFER_SIZE-1)/AWG_FSAMP,AWG_BUFFER_SIZE)
+        corr_fig, corr_ax = plt.subplots()
+        for n in range(len(DAQ_CHANNELS)):
+            corr_ax.plot(corr_lags, n + corr / np.max(corr), label = f"corr(DAQ {n+1}, AWG {n+1})")
+        fig, axs = plt.subplots(2,1,sharex=True)
+        for n in range(len(AWG_CHANNELS)):
+            axs[0].plot(tvec_awg, n + awg.waveforms[n]*0.9, label = f"AWG {n+1}")
+        for n in range(len(DAQ_CHANNELS)):
+            axs[1].plot(tvec_daq, n + daq_data[n], label = f"DAQ {n+1}")
+        axs[1].set_xlabel("t [s]")
+        axs[0].legend()
+        axs[1].legend()
+        axs[0].set_ylabel("V [V]")
+        axs[1].set_ylabel("V [V]")
+        plt.show()
 except pxi_modules.KeysightException as e:
     print("Encountered fatal exception when commanding Keysight equipment, exiting now")
     print(e)
     awg.stop()
     daq.stop()
     exit()
-print("channel ", c, " noise levels (stddev) = ", noise_stddev)
-print("channel ", c, " noise levels (maxabs) = ", noise_maxabs)
-# reset capture sizes to original params
+except LagException as e:
+    print("Encountered fatal exception when calculating lag")
+    print(e)
+    awg.stop()
+    daq.stop()
+    exit()
+print("noise levels (stddev) = ", noise_stddev)
+print("noise levels (maxabs) = ", noise_maxabs)
+# reset capture cycles to original value
 daq.set_capture_cycles(TEST_CYCLES)
 
 one_to_zero = np.zeros((N_CONFIGS,len(DAQ_CHANNELS)))
@@ -182,11 +250,11 @@ for n,c in enumerate(AWG_CHANNELS):
             awg.set_buffer_contents(c, clock_signal)
 for cfg in range(N_CONFIGS):
     amplitudes = TEST_CONFIGURATIONS[cfg]
-    # set up amplitudes
-    for n,c in enumerate(AWG_CHANNELS):
-        awg.set_channel_amplitude(c, amplitudes[n])
-    # capture data
     try:
+        # set up amplitudes
+        for n,c in enumerate(AWG_CHANNELS):
+            awg.set_channel_amplitude(c, amplitudes[n])
+        # capture data
         awg.launch_channels(sum(2**(c-1) for c in AWG_CHANNELS), TEST_CYCLES)
         daq_data = daq.capture(sum(2**(c-1) for c in DAQ_CHANNELS))
         # unit conversion to V
@@ -218,33 +286,25 @@ for cfg in range(N_CONFIGS):
         # if threshold is too high, then there will be incorrectly many 1->0 errors
         # if threshold is too low, then there will be incorrectly many 0->1 errors
         threshold = 200*noise_stddev[n]
-        # get cross correlation between daq data and 2x decimated awg signal to help with alignment for BER calc
-        corr = sigproc.correlate(daq_data[n], np.tile(input_signal[::2],TEST_CYCLES))
-        # corr /= np.max(corr)
-        lags = sigproc.correlation_lags(len(daq_data[n]), len(input_signal[::2])*TEST_CYCLES)
-        best_lag = lags[np.argmax(corr)]
-        daq_data_delayed = np.zeros(DAQ_BUFFER_SIZE*TEST_CYCLES)
-        if best_lag > 0:
-            daq_data_delayed[:len(daq_data[n])-best_lag] = daq_data[n,best_lag:]
-        else:
-            print("WARNING: got unphysical optimal lag, BER rate estimate has been set to 1 (indicating > 0.5 BER)")
-            one_to_zero[cfg,n] = -1
-            zero_to_one[cfg,n] = -1
-            ber[cfg,n] = 1
-            continue
+        # get peaks and then bin each peak into a symbol location/time
+        #daq_data_delayed = np.zeros(DAQ_BUFFER_SIZE*TEST_CYCLES)
+        #daq_data_delayed[:len(daq_data[n])-lags[n]] = daq_data[n,lags[n]:]
+        # allow 3/4 of a clock/symbol period of separation between peaks
+        peaks, _ = sigproc.find_peaks(daq_data[n], height=threshold, distance=(3*DAQ_FSAMP)//(4*BIT_RATE))
+        daq_symbols = np.zeros(SYMS_PER_WORD*NUM_WORDS*TEST_CYCLES)
+        for peak in peaks:
+            peak_samp_idx = peak - lags[n]
+            daq_symbols[peak_samp_idx // (DAQ_FSAMP//BIT_RATE)] = 1
         for bit in range(SYMS_PER_WORD*NUM_WORDS*TEST_CYCLES):
             # each symbol is DAQ_FSAMP//BIT_RATE samples
-            search_min = max(0, bit*(DAQ_FSAMP//BIT_RATE) - DAQ_FSAMP//(2*BIT_RATE))
-            search_max = min(DAQ_BUFFER_SIZE*TEST_CYCLES, bit*(DAQ_FSAMP//BIT_RATE) + DAQ_FSAMP//(2*BIT_RATE))
             if bits[bit % (SYMS_PER_WORD*NUM_WORDS)]:
                 # make sure that there wasn't a 1 -> 0 error
-                # check that there's a peak in the vicinity
-                if max(daq_data_delayed[search_min:search_max]) < threshold:
+                if daq_symbols[bit] != 1:
                     one_to_zero[cfg,n] += 1
             else:
                 # make sure there wasn't a 0 -> 1 error
                 # check that there aren't any peaks in the vicinity
-                if max(daq_data_delayed[search_min:search_max]) > threshold:
+                if daq_symbols[bit] != 0:
                     zero_to_one[cfg,n] += 1
         ber[cfg,n] = (one_to_zero[cfg,n] + zero_to_one[cfg,n])/(SYMS_PER_WORD*NUM_WORDS*TEST_CYCLES)
     t1 = time.process_time()
@@ -260,40 +320,31 @@ print("closing AWG and DAQ")
 awg.stop()
 daq.stop()
 
-t_units = 1e-9
-siprefix = {
-    1e-24:'y', 1e-21:'z', 1e-18:'a', 1e-15:'f', 1e-12:'p', 1e-9:'n',
-    1e-6:'u', 1e-3:'m', 1e-2:'c', 1e-1:'d', 1e3:'k', 1e6:'M', 1e9:'G',
-    1e12:'T', 1e15:'P', 1e18:'E', 1e21:'Z', 1e24:'Y'
-}
-
 if DEBUG_BER_PLOT:
     print("plotting BER results")
     tvec_daq = np.linspace(0,(DAQ_BUFFER_SIZE*TEST_CYCLES-1)/DAQ_FSAMP/t_units,DAQ_BUFFER_SIZE*TEST_CYCLES)
     tvec_awg = np.linspace(0,(AWG_BUFFER_SIZE*TEST_CYCLES-1)/AWG_FSAMP/t_units,AWG_BUFFER_SIZE*TEST_CYCLES)
     colors = list(mcolors.TABLEAU_COLORS.keys())
-    fig, axs = plt.subplots(3,1)
+    fig, axs = plt.subplots(2,1)
     axs[0].plot(tvec_daq, daq_data[1], label = 'daq data', color=colors[0])
     axs[0].plot(tvec_awg, np.tile(input_signal,TEST_CYCLES), label = 'awg output', color=colors[1])
     axs[0].legend()
     axs[0].set_xlabel(f"t [{siprefix[t_units]}s]")
     axs[0].set_ylabel("V [V]")
-    axs[1].plot(lags/DAQ_FSAMP/t_units, corr, label = "corr(daq_data, awg_data)", color=colors[0])
+    daq_data_delayed = np.zeros(DAQ_BUFFER_SIZE*TEST_CYCLES)
+    daq_data_delayed[:len(daq_data[1])-lags[1]] = daq_data[1,lags[1]:]
+    axs[1].plot(tvec_daq, daq_data_delayed, label = 'daq data', color=colors[0])
+    axs[1].plot(tvec_awg[::2], np.tile(input_signal[::2],TEST_CYCLES), label = 'awg output', color=colors[1])
+    axs[1].plot(np.linspace(0,(SYMS_PER_WORD*NUM_WORDS*TEST_CYCLES-1)/BIT_RATE/t_units,SYMS_PER_WORD*NUM_WORDS*TEST_CYCLES), 0.6*np.tile(bits,TEST_CYCLES), '.', label = 'bits', color=colors[2])
     axs[1].legend()
     axs[1].set_xlabel(f"t [{siprefix[t_units]}s]")
-    axs[2].plot(tvec_daq, daq_data_delayed, label = 'daq data', color=colors[0])
-    axs[2].plot(tvec_awg[::2], np.tile(input_signal[::2],TEST_CYCLES), label = 'awg output', color=colors[1])
-    axs[2].plot(np.linspace(0,(SYMS_PER_WORD*NUM_WORDS*TEST_CYCLES-1)/BIT_RATE/t_units,SYMS_PER_WORD*NUM_WORDS*TEST_CYCLES), 0.6*np.tile(bits,TEST_CYCLES), '.', label = 'bits', color=colors[2])
-    axs[2].legend()
-    axs[2].set_xlabel(f"t [{siprefix[t_units]}s]")
-    axs[2].set_ylabel("V [V]")
+    axs[1].set_ylabel("V [V]")
     plt.show()
 
 if PLOT_RESULTS:
     print("plotting results")
     plt.figure()
     tvec = np.linspace(0,(DAQ_BUFFER_SIZE*TEST_CYCLES-1)/DAQ_FSAMP/t_units,DAQ_BUFFER_SIZE*TEST_CYCLES)
-    tvec = tvec - DAQ_NOISE_CAL_BUFFER_LENGTH/DAQ_FSAMP/t_units
     colors = list(mcolors.TABLEAU_COLORS.keys())
     for n,channel in enumerate(DAQ_CHANNELS):
         plt.plot(tvec, n + daq_data[n], label = f'ch{channel}', color=colors[n])
