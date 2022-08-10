@@ -43,7 +43,7 @@ class AWG:
     def set_buffer_length(self, buffer_length):
         # zero pads buffer
         if buffer_length < self.buffer_length:
-            self.waveforms = self.waveforms[:,0:buffer_length-1]
+            self.waveforms = self.waveforms[:,:buffer_length]
         else:
             self.waveforms = np.append(self.waveforms, np.zeros(shape=(self.waveforms.shape[0],buffer_length-self.buffer_length)), axis=1)
         self.buffer_length = buffer_length
@@ -134,6 +134,12 @@ class DAQ:
             self.full_scale[c] = full_scale[n]
             self.daq.channelInputConfig(c, self.full_scale[c], impedance[n], coupling[n])
     
+    def set_buffer_length(self, buffer_size):
+        self.points_per_cycle = buffer_size
+    
+    def set_capture_cycles(self, capture_cycles):
+        self.cycles = capture_cycles
+    
     def set_trigger_mode(self, trigger_mode, trigger_delay=0, analog_trig_chan=1, analog_trig_type=atrg.RISING_EDGE, threshold=0):
         self.trigger_mode = trigger_mode
         for c in self.channels.keys():
@@ -175,7 +181,7 @@ class DAQ:
             if self.trigger_mode != trg.SWHVITRIG:
                 self.wait_until_points_read(channel, self.points_per_cycle*self.cycles, capture_timeout)
         self.daq.DAQstopMultiple(daq_mask)
-        read_timeout = 100 # timeout in ms; 0 is infinite
+        read_timeout = 100 # timeout in ms; 0 is infinite (DO NOT SET TO ZERO OR YOUR PROGRAM WILL HANG)
         for channel in self.channels.keys():
             data[self.channels[channel]] = self.daq.DAQread(channel, self.cycles*self.points_per_cycle, read_timeout)
         return data
