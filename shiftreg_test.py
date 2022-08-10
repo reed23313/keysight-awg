@@ -2,9 +2,9 @@
 # It allows for synchronous capture of a device's response given an arbitrary stimulus
 # It is designed to test a superconducting shift register made with nanocryotrons
 
-# test pattern: 256 bytes (0x00, 0x01, ... 0xff)
-# send pattern 489 times to 1Mbit of data (BER down to 1e-6) ---> this should be reasonable
-# send pattern 488282 times to get 1Gbit of data (BER down to 1e-9) ---> only do this if lower BER is really needed
+# test pattern: 500 random bytes
+# send pattern 250 times to 1Mbit of data (BER down to 1e-6) ---> this should be reasonable
+# send pattern 250000 times to get 1Gbit of data (BER down to 1e-9) ---> only do this if lower BER is really needed
 
 # sweep Vinput, Vclk_in, Vclk_shift, Vclk_readout
 
@@ -63,21 +63,18 @@ def make_word(value, bits, pulse, freq, fs):
 
 TEST_CYCLES = 1
 WORD_SIZE = 8
-NUM_WORDS = 2**WORD_SIZE
+NUM_WORDS = 500
 BIT_RATE = int(100e6) # sym/s (maybe up to 150MHz; 100MHz looks good however)
 AWG_BUFFER_SIZE = NUM_WORDS*WORD_SIZE*(AWG_FSAMP//BIT_RATE)
 DAQ_BUFFER_SIZE = NUM_WORDS*WORD_SIZE*(DAQ_FSAMP//BIT_RATE)
 input_signal = []
 for i in range(NUM_WORDS):
     input_signal += make_word(random.randint(0, NUM_WORDS-1), WORD_SIZE, AWG_SHORT_PULSES[0], BIT_RATE, AWG_FSAMP)
-clock_word = make_word(NUM_WORDS-1, WORD_SIZE, AWG_SHORT_PULSES[0], BIT_RATE, AWG_FSAMP)
+# clocks just get 1111....
+clock_word = make_word(2**WORD_SIZE-1, WORD_SIZE, AWG_SHORT_PULSES[0], BIT_RATE, AWG_FSAMP)
 clock_signal = clock_word*NUM_WORDS
 
-print(AWG_BUFFER_SIZE)
-print(len(input_signal))
-print(len(clock_signal))
-print(len(clock_word))
-
+# make sure we've created the buffers properly
 assert len(input_signal) == AWG_BUFFER_SIZE
 assert len(clock_signal) == AWG_BUFFER_SIZE
 
@@ -104,6 +101,7 @@ daq.set_trigger_mode(trg.EXTTRIG, trigger_delay = DAQ_TRIG_DELAY)
 try:
     awg.launch_channels(sum(2**(c-1) for c in AWG_CHANNELS), TEST_CYCLES)
     daq_data = daq.capture(sum(2**(c-1) for c in DAQ_CHANNELS))
+    # unit conversion to V
     for n in range(len(DAQ_CHANNELS)):
         daq_data[n] = (daq_data[n]/2**15)*DAQ_FULL_SCALE[n]
 except Exception as e:
