@@ -23,8 +23,14 @@ from keysightSD1 import AIN_Impedance as imp
 from keysightSD1 import AIN_Coupling as cpl
 from keysightSD1 import SD_TriggerModes as trg
 
+# use AWG to mimic SNSPD pulse
+snspd_pulse = sio.loadmat('csvs/SPG717_sr2loop_noinput_clk1_shunt123_ntron_shiftreg_2loop_no_input_2022-05-17 17-33-06.mat')['C4y'][1,3500:3700]
+
 CHASSIS = 1
-PLOT_RESULTS = True
+PLOT_RESULTS = False
+DEBUG_BER_CHECKER = True
+DEBUG_BER_PLOT = True
+DEBUG_BER = 0.01
 RAND_SEED = None # if None, use current system time as random seed
 random.seed(RAND_SEED)
 
@@ -63,19 +69,33 @@ def make_word(value, bits, pulse, freq, fs):
 
 TEST_CYCLES = 1
 WORD_SIZE = 8
-NUM_WORDS = 500
+NUM_WORDS = 1250
 BIT_RATE = int(100e6) # sym/s (maybe up to 150MHz; 100MHz looks good however)
 AWG_BUFFER_SIZE = NUM_WORDS*WORD_SIZE*(AWG_FSAMP//BIT_RATE)
-DAQ_BUFFER_SIZE = NUM_WORDS*WORD_SIZE*(DAQ_FSAMP//BIT_RATE)
+DAQ_BUFFER_SIZE = NUM_WORDS*WORD_SIZE*(DAQ_FSAMP//BIT_RATE) + DAQ_NOISE_CAL_BUFFER_LENGTH
 input_signal = []
+error_signal = [] # generate copy of input signal with some errors based on DEBUG_BER
+bits = np.zeros(NUM_WORDS*WORD_SIZE)
 for i in range(NUM_WORDS):
-    input_signal += make_word(random.randint(0, NUM_WORDS-1), WORD_SIZE, AWG_SHORT_PULSES[0], BIT_RATE, AWG_FSAMP)
+    val = random.randint(0, NUM_WORDS-1)
+    input_signal += make_word(val, WORD_SIZE, AWG_SHORT_PULSES[0], BIT_RATE, AWG_FSAMP)
+    new_val = []
+    for b in range(WORD_SIZE):
+        if random.random() < DEBUG_BER:
+            # flip each bit w.p. DEBUG_BER
+            new_val.append(1 - (val & 1))
+        else:
+            new_val.append(val & 1)
+        bits[i*WORD_SIZE + b] = val & 1
+        val >>= 1
+    error_signal += make_word(sum(i*2**n for n,i in enumerate(new_val)), WORD_SIZE, AWG_SHORT_PULSES[0], BIT_RATE, AWG_FSAMP)
 # clocks just get 1111....
 clock_word = make_word(2**WORD_SIZE-1, WORD_SIZE, AWG_SHORT_PULSES[0], BIT_RATE, AWG_FSAMP)
 clock_signal = clock_word*NUM_WORDS
 
 # make sure we've created the buffers properly
 assert len(input_signal) == AWG_BUFFER_SIZE
+assert len(error_signal) == AWG_BUFFER_SIZE
 assert len(clock_signal) == AWG_BUFFER_SIZE
 
 # add AWG and DAQ channels, set AWG buffer contents
@@ -87,7 +107,10 @@ for n,c in enumerate(AWG_CHANNELS):
     if c == 1:
         awg.set_buffer_contents(c, input_signal)
     else:
-        awg.set_buffer_contents(c, clock_signal)
+        if DEBUG_BER_CHECKER and c == 2:
+            awg.set_buffer_contents(c, error_signal)
+        else:
+            awg.set_buffer_contents(c, clock_signal)
 
 daq = pxi_modules.DAQ("M3102A", 1, 7, DAQ_BUFFER_SIZE, TEST_CYCLES)
 daq.add_channels(DAQ_CHANNELS, DAQ_FULL_SCALE, DAQ_IMPEDANCE, DAQ_COUPLING)
@@ -114,30 +137,91 @@ print("closing AWG and DAQ")
 awg.stop()
 daq.stop()
 
+# calculate bit error rate
+one_to_zero = np.zeros(len(DAQ_CHANNELS))
+zero_to_one = np.zeros(len(DAQ_CHANNELS))
+ber = np.zeros(len(DAQ_CHANNELS))
+for n,channel in enumerate(DAQ_CHANNELS):
+    if DEBUG_BER_CHECKER and channel != 2:
+        continue
+    if not DEBUG_BER_CHECKER and channel != 3:
+        continue
+    # to determine threshold, use first 1000 samples: they're all zero based on the delay
+    # zscore reflects the SNR of the readout circuit --- 500 is suitable for loopback,
+    # but most likely a lower threshold (e.g. 5sigma) is needed for a real test
+    zscore = 50
+    threshold = zscore*np.std(daq_data[n,:1000])
+    # get cross correlation between daq data and 2x decimated awg signal to help with alignment for BER calc
+    corr = sigproc.correlate(daq_data[n], input_signal[::2])
+    corr /= np.max(corr)
+    lags = sigproc.correlation_lags(len(daq_data[n]), len(input_signal[::2]))
+    best_lag = lags[np.argmax(corr)]
+    daq_data_delayed = np.zeros(DAQ_BUFFER_SIZE)
+    if best_lag > 0:
+        daq_data_delayed[:len(daq_data[n])-best_lag] = daq_data[n,best_lag:]
+    else:
+        print("WARNING: got unphysical optimal lag, BER rate estimate should be set to >0.5")
+        best_lag = -best_lag
+        daq_data_delayed[best_lag:] = daq_data[n,:len(daq_data[n])-best_lag]
+    for bit in range(WORD_SIZE*NUM_WORDS):
+        # each symbol is DAQ_FSAMP//BIT_RATE samples
+        search_min = max(0, bit*(DAQ_FSAMP//BIT_RATE) - DAQ_FSAMP//(2*BIT_RATE))
+        search_max = min(DAQ_BUFFER_SIZE, bit*(DAQ_FSAMP//BIT_RATE) + DAQ_FSAMP//(2*BIT_RATE))
+        if bits[bit]:
+            # make sure that there wasn't a 1 -> 0 error
+            # check that there's a peak in the vicinity
+            if max(daq_data_delayed[search_min:search_max]) < threshold:
+                #print("1->0 error at t = ", tvec_daq[search_min + np.argmax(daq_data_delayed[search_min:search_max])])
+                one_to_zero[n] += 1
+        else:
+            # make sure there wasn't a 0 -> 1 error
+            # check that there aren't any peaks in the vicinity
+            if max(daq_data_delayed[search_min:search_max]) > threshold:
+                #print("0->1 error at t = ", tvec_daq[search_min + np.argmax(daq_data_delayed[search_min:search_max])])
+                zero_to_one[n] += 1
+    ber[n] = (one_to_zero[n] + zero_to_one[n])/(WORD_SIZE*NUM_WORDS)
+
+print("num (1->0 errors) = ", one_to_zero)
+print("num (0->1 errors) = ", zero_to_one)
+print("BER = ", ber)
+
+t_units = 1e-9
+siprefix = {
+    1e-24:'y', 1e-21:'z', 1e-18:'a', 1e-15:'f', 1e-12:'p', 1e-9:'n',
+    1e-6:'u', 1e-3:'m', 1e-2:'c', 1e-1:'d', 1e3:'k', 1e6:'M', 1e9:'G',
+    1e12:'T', 1e15:'P', 1e18:'E', 1e21:'Z', 1e24:'Y'
+}
+
+if DEBUG_BER_PLOT:
+    print("plotting BER results")
+    tvec_daq = np.linspace(0,(DAQ_BUFFER_SIZE*TEST_CYCLES-1)/DAQ_FSAMP/t_units,DAQ_BUFFER_SIZE*TEST_CYCLES)
+    tvec_awg = np.linspace(0,(AWG_BUFFER_SIZE*TEST_CYCLES-1)/AWG_FSAMP/t_units,AWG_BUFFER_SIZE*TEST_CYCLES)
+    colors = list(mcolors.TABLEAU_COLORS.keys())
+    fig, axs = plt.subplots(3,1)
+    axs[0].plot(tvec_daq, daq_data[1], label = 'daq data', color=colors[0])
+    axs[0].plot(tvec_awg, input_signal, label = 'awg output', color=colors[1])
+    axs[0].legend()
+    axs[0].set_xlabel(f"t [{siprefix[t_units]}s]")
+    axs[0].set_ylabel("V [V]")
+    axs[1].plot(lags/DAQ_FSAMP/t_units, corr, label = "corr(daq_data, awg_data)", color=colors[0])
+    axs[1].legend()
+    axs[1].set_xlabel(f"t [{siprefix[t_units]}s]")
+    axs[2].plot(tvec_daq, daq_data_delayed, label = 'daq data', color=colors[0])
+    axs[2].plot(tvec_awg[::2], input_signal[::2], label = 'awg output', color=colors[1])
+    axs[2].plot(np.linspace(0,(WORD_SIZE*NUM_WORDS-1)/BIT_RATE/t_units,WORD_SIZE*NUM_WORDS), 0.6*bits, '.', label = 'bits', color=colors[2])
+    axs[2].legend()
+    axs[2].set_xlabel(f"t [{siprefix[t_units]}s]")
+    axs[2].set_ylabel("V [V]")
+    plt.show()
+
 if PLOT_RESULTS:
     print("plotting results")
     plt.figure()
-    t_units = 1e-6
-    siprefix = {
-        1e-24:'y', 1e-21:'z', 1e-18:'a', 1e-15:'f', 1e-12:'p', 1e-9:'n',
-        1e-6:'u', 1e-3:'m', 1e-2:'c', 1e-1:'d', 1e3:'k', 1e6:'M', 1e9:'G',
-        1e12:'T', 1e15:'P', 1e18:'E', 1e21:'Z', 1e24:'Y'
-    }
     tvec = np.linspace(0,(DAQ_BUFFER_SIZE*TEST_CYCLES-1)/DAQ_FSAMP/t_units,DAQ_BUFFER_SIZE*TEST_CYCLES)
     tvec = tvec - DAQ_NOISE_CAL_BUFFER_LENGTH/DAQ_FSAMP/t_units
     colors = list(mcolors.TABLEAU_COLORS.keys())
     for n,channel in enumerate(DAQ_CHANNELS):
-        # do peak finding on channel data and calculate bit error rate
-        # use first 1000 samples, since they are going to be all zero based on the delay
-        # zscore reflects the SNR of the readout circuit --- 500 is suitable for loopback,
-        # but most likely a lower threshold (e.g. 5sigma) is needed for a real test
-        zscore = 50
-        threshold = zscore*np.std(daq_data[n,:1000])
-        distance = int(0.8*(DAQ_FSAMP/BIT_RATE))
-        peaks, _ = sigproc.find_peaks(daq_data[n], height=threshold, distance=distance)
-        # calculate bit error rate based on peaks
         plt.plot(tvec, n + daq_data[n], label = f'ch{channel}', color=colors[n])
-        plt.plot(tvec[peaks], n + daq_data[n][peaks], "x", color=colors[n])
     plt.legend()
     plt.xlabel(f"t [{siprefix[t_units]}s]")
     plt.ylabel("V [V]")

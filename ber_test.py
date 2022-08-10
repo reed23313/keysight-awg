@@ -130,7 +130,6 @@ if PLOT_RESULTS:
     print("plotting results")
     fig, axs = plt.subplots(3,1)
     axs[0].plot(tvec_daq, daq_data, label = 'daq data', color=colors[0])
-    axs[0].plot(tvec_daq[peaks], daq_data[peaks], "x", color=colors[0])
     axs[0].plot(tvec_awg, input_signal, label = 'awg output', color=colors[1])
     axs[0].legend()
     axs[0].set_xlabel(f"t [{siprefix[t_units]}s]")
