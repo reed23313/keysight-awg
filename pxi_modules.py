@@ -66,6 +66,9 @@ class AWG:
     
     def set_channel_amplitude(self, channel, amplitude):
         self.awg.channelAmplitude(channel, amplitude)
+    
+    def set_channel_offset(self, channel, offset):
+        self.awg.channelOffset(channel, offset)
 
     def set_trigger_mode(self, trigger_mode):
         self.trigger_mode = trigger_mode

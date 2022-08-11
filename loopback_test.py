@@ -48,10 +48,10 @@ c3 = c3_full_bw[::10] # downsample 10x to go from 10GS/s to 1GS/s
 c4 = c4_full_bw[::10] # downsample 10x to go from 10GS/s to 1GS/s
 
 awg_data = [
-    c3,
-    c4,
-    #((AWG_LONG_PULSE + [0]*25)*4 + [0]*20)*2 + [0]*100,
-    #((AWG_LONG_PULSE + [0]*25)*4 + [0]*20)*2 + [0]*100,
+    #c3,
+    #c4,
+    ((AWG_LONG_PULSE + [0]*29)*4 + [0]*20)*4 + [0]*200,
+    ((AWG_LONG_PULSE + [0]*29)*4 + [0]*20)*4 + [0]*200,
     ((AWG_LONG_PULSE + [0]*29)*4 + [0]*20)*4 + [0]*200,
     ((AWG_LONG_PULSE + [0]*29)*4 + [0]*20)*4 + [0]*200
     #([1]*98 + [0.5, 0.1, -0.1, -0.5] + [-1]*98)*5
@@ -63,7 +63,8 @@ awg.add_channels(AWG_CHANNELS)
 for n,c in enumerate(AWG_CHANNELS):
     awg.set_channel_delay(c, AWG_DELAYS[n])
     awg.set_channel_amplitude(c, AWG_AMPLITUDE[n])
-    awg.set_buffer_contents(c, awg_data[n], AWG_AMPLITUDE[n])
+    awg.set_channel_offset(c, 0)
+    awg.set_buffer_contents(c, awg_data[n])
 
 daq = pxi_modules.DAQ("M3102A", 1, 7, DAQ_POINTS_PER_CYCLE, DAQ_CYCLES)
 daq.add_channels(DAQ_CHANNELS, DAQ_FULL_SCALE, DAQ_IMPEDANCE, DAQ_COUPLING)
@@ -95,12 +96,14 @@ daq.set_trigger_mode(trg.EXTTRIG, trigger_delay = DAQ_TRIG_DELAY)
 # since the digitizer is in slot 7 (which is part of PXI bus 2) and the AWG is in slot 5 (PXI bus 1),
 # the route from PXI bus 2 to bus 1 must also be enabled
 try:
-    awg.launch_channels(sum(2**(c-1) for c in AWG_CHANNELS), DAQ_CYCLES)
+    awg.launch_channels(sum(2**(c-1) for c in AWG_CHANNELS), 0)
     daq_data = daq.capture(sum(2**(c-1) for c in DAQ_CHANNELS))
 except Exception as e:
     print(e)
     awg.stop()
     daq.stop()
+
+input('press any key to stop awg')
 
 # very important to close AWG, otherwise the buffers will not get properly flushed
 print("closing AWG and DAQ")
@@ -120,8 +123,8 @@ for n,channel in enumerate(DAQ_CHANNELS):
 axs[0].legend()
 axs[0].set_xlabel("t [ns]")
 axs[0].set_ylabel("V [V]")
-axs[1].plot(np.linspace(0,1e9*10*AWG_BUFFER_LENGTH*0.1*AWG_TSAMP,10*AWG_BUFFER_LENGTH), c3_full_bw, label = 'c3')
-axs[1].plot(np.linspace(0,1e9*10*AWG_BUFFER_LENGTH*0.1*AWG_TSAMP,10*AWG_BUFFER_LENGTH), c4_full_bw, label = 'c4')
+axs[1].plot(np.linspace(0,1e9*10*AWG_BUFFER_LENGTH*0.1*AWG_TSAMP,10*AWG_BUFFER_LENGTH), c3_full_bw, label = 'saved scope data c3')
+axs[1].plot(np.linspace(0,1e9*10*AWG_BUFFER_LENGTH*0.1*AWG_TSAMP,10*AWG_BUFFER_LENGTH), c4_full_bw, label = 'saved scope data c4')
 axs[1].legend()
 axs[1].set_xlabel("t [ns]")
 axs[1].set_ylabel("V [V]")
