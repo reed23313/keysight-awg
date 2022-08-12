@@ -99,6 +99,12 @@ class AWG:
         error = self.awg.AWGstartMultiple(awg_mask)
         if error < 0:
             raise KeysightException(f"AWG start error: {error}")
+        
+    def launch_channels_start_only(self, awg_mask):
+        # start all AWGs simultaneously
+        error = self.awg.AWGstartMultiple(awg_mask)
+        if error < 0:
+            raise KeysightException(f"AWG start error: {error}")
 
     def stop(self):
         self.awg.AWGstopMultiple(sum(2**(c-1) for c in self.channels.keys()))
