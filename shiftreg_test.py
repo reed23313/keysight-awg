@@ -52,7 +52,6 @@ PLOT_RESULTS = False
 DEBUG_OPTIMAL_AMPLITUDES = False
 SAVE_TRANSIENT = False
 DEBUG_DELAY_CALC = False
-DEBUG_BER_CHECKER = False
 DEBUG_BER_PLOT = False
 DEBUG_BER = 0.01
 RAND_SEED = 1000*((ord('S')*256 + ord('P'))*256 + ord('G')) + 717 # if None, use current system time as random seed
@@ -60,31 +59,39 @@ random.seed(RAND_SEED)
 
 # determine these by setting DEBUG_OPTIMAL_AMPLITUDES = True
 # Vinput, Vclkin, Vclksh, Vclkro
+#AWG_OPTIMAL_AMPLITUDES = [0.28, 0.25, 0.19, 0.58] # amplitude to reset shift reg state
 #AWG_OPTIMAL_AMPLITUDES = [0.28, 0.22, 0.19, 0.58] # optimal for short pulses at 100MHz
-#AWG_OPTIMAL_AMPLITUDES = [0.27, 0.22, 0.32, 0.77] # optimal for short pulses at 50MHz
-AWG_OPTIMAL_AMPLITUDES = [0.27, 0.22, 0.32, 0.75] # optimal for short pulses at 10MHz
+#AWG_OPTIMAL_AMPLITUDES = [0.19, 0.16, 0.35, 0.75] # optimal for short pulses at 75MHz
+#AWG_OPTIMAL_AMPLITUDES = [0.20, 0.19, 0.35, 0.64] # optimal for short pulses at 50MHz
+AWG_OPTIMAL_AMPLITUDES = [0.20, 0.20, 0.35, 0.64] # optimal for short pulses at 50MHz (editing)
+#AWG_OPTIMAL_AMPLITUDES = [0.25, 0.21, 0.35, 0.64] # optimal for short pulses at 25MHz
+#AWG_OPTIMAL_AMPLITUDES = [0.27, 0.22, 0.32, 0.75] # optimal for short pulses at 10MHz
 # AWG_OPTIMAL_AMPLITUDES = [0.15, 0.11, 0.16, 0.65] # too big for long pulses (long pulse ~ Keysight 33600A)
 # "current source" impedance:
 # 1.96k, 1.96k, 1.96k, 11k
 # clock amplitude sweeps
 N_VINPUT = 1
 N_VCLKIN = 1
-N_VCLKSH = 100
-N_VCLKRO = 100
-#N_VCLKSH = 32
-#N_VCLKRO = 32
-#N_VCLKSH = 1
-#N_VCLKRO = 1
+#N_VCLKSH = 16
+#N_VCLKRO = 16
+N_VCLKSH = 51
+N_VCLKRO = 51
 V_INPUT_SWEEP = np.linspace(AWG_OPTIMAL_AMPLITUDES[0], AWG_OPTIMAL_AMPLITUDES[0], N_VINPUT)
 V_CLKIN_SWEEP = np.linspace(AWG_OPTIMAL_AMPLITUDES[1], AWG_OPTIMAL_AMPLITUDES[1], N_VCLKIN)
 #V_CLKSH_SWEEP = np.linspace(AWG_OPTIMAL_AMPLITUDES[2], AWG_OPTIMAL_AMPLITUDES[2], N_VCLKSH)
 #V_CLKRO_SWEEP = np.linspace(AWG_OPTIMAL_AMPLITUDES[3], AWG_OPTIMAL_AMPLITUDES[3], N_VCLKRO)
 #V_CLKSH_SWEEP = np.linspace(0.25, 0.31, N_VCLKSH) # sweeps for 100MHz
 #V_CLKRO_SWEEP = np.linspace(0.72, 0.78, N_VCLKRO)
-#V_CLKSH_SWEEP = np.linspace(0.20, 0.44, N_VCLKSH) # sweeps for 10MHz
+#V_CLKSH_SWEEP = np.linspace(0.20, 0.44, N_VCLKSH) # sweeps for 10MHz (narrow)
 #V_CLKRO_SWEEP = np.linspace(0.60, 0.90, N_VCLKRO)
-V_CLKSH_SWEEP = np.linspace(0.10, 0.60, N_VCLKSH) # sweeps for 10MHz
-V_CLKRO_SWEEP = np.linspace(0.50, 1.20, N_VCLKRO)
+#V_CLKSH_SWEEP = np.linspace(0.10, 0.60, N_VCLKSH) # sweeps for 10MHz (wide)
+#V_CLKRO_SWEEP = np.linspace(0.50, 1.20, N_VCLKRO)
+V_CLKSH_SWEEP = np.linspace(0.25, 0.50, N_VCLKSH) # sweeps for 75MHz
+V_CLKRO_SWEEP = np.linspace(0.50, 0.90, N_VCLKRO)
+#V_CLKSH_SWEEP = np.linspace(0.25, 0.50, N_VCLKSH) # sweeps for 50MHz
+#V_CLKRO_SWEEP = np.linspace(0.50, 0.90, N_VCLKRO)
+#V_CLKSH_SWEEP = np.linspace(0.10, 0.60, N_VCLKSH) # sweeps for 25MHz
+#V_CLKRO_SWEEP = np.linspace(0.50, 1.20, N_VCLKRO)
 
 # generate configs
 N_CONFIGS = N_VINPUT*N_VCLKIN*N_VCLKSH*N_VCLKRO
@@ -97,7 +104,7 @@ for v_input in V_INPUT_SWEEP:
                 TEST_CONFIGURATIONS[i,:] = np.array([v_input, v_clk_in, v_clk_sh, v_clk_ro])
                 i = i + 1
 
-BIT_RATE = int(10e6) # sym/s (maybe up to 150MHz; 100MHz looks good however)
+BIT_RATE = int(50e6) # sym/s (maybe up to 150MHz; 100MHz looks good however)
 
 # AWG constants
 AWG_FSAMP = int(1e9) # 1GS/s
@@ -106,7 +113,8 @@ AWG_DELAYS = [0, 0, int(1e9/(2*BIT_RATE)), int(1e9/BIT_RATE)] # delay in ns
 
 # DAQ constants
 DAQ_FSAMP = int(500e6) # 500MS/s
-DAQ_CHANNELS = [3]#[1, 2, 3]
+DAQ_CHANNELS = [3]
+#DAQ_CHANNELS = [1, 2, 3]
 # set the delay until capturing samples from when the trigger condition is met
 # 184 samples seems to be an intrinsic delay between when the DAQ and AWG start given the PXI bus trigger from the DAQ
 DAQ_TRIG_DELAY = 184
@@ -139,8 +147,8 @@ if DEBUG_OPTIMAL_AMPLITUDES:
     TEST_CYCLES = 1
     NUM_WORDS = 10
 else:
-    TEST_CYCLES = 1
-    NUM_WORDS = 125 # should be suitably large enough so that we get good word entropy
+    TEST_CYCLES = 1 # 1Msamp
+    NUM_WORDS = 1250 # should be suitably large enough so that we get good word entropy
 SYMS_PER_WORD = 8 # word size in symbols
 AWG_WORD_SIZE = SYMS_PER_WORD*(AWG_FSAMP//BIT_RATE) # word size in samples
 DAQ_WORD_SIZE = SYMS_PER_WORD*(DAQ_FSAMP//BIT_RATE) # word size in samples
@@ -319,6 +327,7 @@ for n,c in enumerate(AWG_CHANNELS):
     else:
         awg.set_buffer_contents(c, clock_signal)
 try:
+    t0 = time.time()
     for cfg in range(N_CONFIGS):
         amplitudes = TEST_CONFIGURATIONS[cfg]
         # set up amplitudes
@@ -347,14 +356,15 @@ try:
             # if threshold is too high, then there will be incorrectly many 1->0 errors
             # if threshold is too low, then there will be incorrectly many 0->1 errors
             daq_symbols = np.zeros(SYMS_PER_WORD*NUM_WORDS*TEST_CYCLES)
-            threshold = zscore*noise_stddev[n]
+            #threshold = zscore*noise_stddev[n]
+            threshold = 0.3*np.max(daq_data[n])
             #threshold = 20*energy_stddev[n]
             #daq_lpf = sigproc.lfilter(FILT_B, FILT_A, daq_data_delayed[n])
             #energy = np.trapz(np.square(np.reshape(daq_lpf, (NUM_WORDS*SYMS_PER_WORD*TEST_CYCLES,DAQ_FSAMP//BIT_RATE))), axis=1)
             #daq_symbols = energy > threshold
             # get peaks and then bin each peak into a symbol location/time
             # allow 3/4 of a clock/symbol period of separation between peaks
-            peaks, _ = sigproc.find_peaks(daq_data[n], height=threshold, distance=(3*DAQ_FSAMP)//(4*BIT_RATE))
+            peaks, _ = sigproc.find_peaks(daq_data[n], height=threshold, distance=(7*DAQ_FSAMP)//(8*BIT_RATE))
             daq_symbols[(peaks - lags[n]) // (DAQ_FSAMP//BIT_RATE)] = 1
             long_bits = np.tile(bits, TEST_CYCLES)
             zero_to_one[cfg,n] = np.sum(long_bits < daq_symbols)
@@ -363,8 +373,11 @@ try:
         #t1 = time.process_time()
         #ber_calc_time = t1 - t0
         #print("it took ", ber_calc_time, " to calculate the bit error rate")
-        if (cfg % max(1,(N_CONFIGS//10))) == 0:
+        if (cfg % max(1,(N_CONFIGS//100))) == 0:
             print(cfg*100/N_CONFIGS, "% done")
+    t1 = time.time()
+    ber_calc_time = t1 - t0
+    print("it took ", ber_calc_time, "s to calculate the bit error rate")
 except pxi_modules.KeysightException as e:
     print("Encountered fatal exception when commanding Keysight equipment, exiting now")
     print(e)
@@ -409,9 +422,11 @@ for cfg in range(N_CONFIGS):
 ber_min = 1/(SYMS_PER_WORD*NUM_WORDS*TEST_CYCLES)
 im = ax.imshow(np.clip(ber_shro,ber_min,1), origin='lower', norm=mcolors.LogNorm(vmin=ber_min, vmax=1))
 t = np.logspace(np.ceil(np.log10(ber_min)), 0, 5)
-fig.colorbar(im, ax=ax)
-ax.set_xticks(np.arange(N_VCLKSH), np.round(V_CLKSH_SWEEP*1e3).astype(np.int32))
-ax.set_yticks(np.arange(N_VCLKRO), np.round(V_CLKRO_SWEEP*1e3).astype(np.int32))
+cb = fig.colorbar(im, ax=ax)
+cb.set_label('BER')
+ax.set_title(f'Bit error rate {round(SYMS_PER_WORD*NUM_WORDS*TEST_CYCLES/1e6,3)}MS at {int(BIT_RATE/1e6)}MS/s ({timestamp}) threshold = max')
+ax.set_xticks((N_VCLKSH//5)*np.arange(6), np.round(V_CLKSH_SWEEP[::(N_VCLKSH//5)]*1e3).astype(np.int32))
+ax.set_yticks((N_VCLKRO//5)*np.arange(6), np.round(V_CLKRO_SWEEP[::(N_VCLKRO//5)]*1e3).astype(np.int32))
 ax.set_xlabel("V_clksh [mV]")
 ax.set_ylabel("V_clkro [mV]")
 plt.savefig(f'csvs/shiftreg_ber_{int(BIT_RATE/1e6)}MHz_{timestamp}.png', bbox_inches='tight')
