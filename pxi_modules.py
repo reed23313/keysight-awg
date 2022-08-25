@@ -99,6 +99,22 @@ class AWG:
         error = self.awg.AWGstartMultiple(awg_mask)
         if error < 0:
             raise KeysightException(f"AWG start error: {error}")
+
+    def setup_single_channel(self, channel, num_cycles):
+        self.awg.AWGflush(channel)
+        wave = keysightSD1.SD_Wave()
+        waveformID = channel
+        error = wave.newFromArrayDouble(0, self.waveforms[self.channels[channel]])
+        if error < 0:
+            raise KeysightException(f"AWG create waveform error (channel {channel}): {error}")
+        error = self.awg.waveformLoad(wave, waveformID, 0)
+        if error < 0:
+            raise KeysightException(f"AWG load waveform error (channel {channel}): {error}")
+        # setting the delay in the AWGqueueWaveform method actually doesn't work properly when queuing multiple cycles
+        #error = self.awg.AWGqueueWaveform(channel, waveformID, self.trigger_mode, self.channel_delays[channel]//10, num_cycles, 0)
+        error = self.awg.AWGqueueWaveform(channel, waveformID, self.trigger_mode, 0, num_cycles, 0)
+        if error < 0:
+            raise KeysightException(f"AWG queue waveform error (channel {channel}): {error}")
         
     def launch_channels_start_only(self, awg_mask):
         # start all AWGs simultaneously

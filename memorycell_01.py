@@ -517,7 +517,7 @@ with open(f'csvs/shiftreg_ber_{int(BIT_RATE/1e6)}MHz_{timestamp}.npy', 'wb') as 
 if SAVE == 1:
     print("saving results")
     # save_data = {"ch1": daq_data[0], "ch2": daq_data[1], "ch3": daq_data[2], "ch4": daq_data[3], "tvec": tvec, "peaks1": peaks1, "peaks2": peaks2, "peaks3": peaks3, "peaks4": peaks4}
-    save_data = {"timestamp": timestamp, "current_magnet": 0.75, "bitrate": BIT_RATE, "awg_fsamp": AWG_FSAMP, "daq_fsamp": DAQ_FSAMP, "v_input": V_INPUT_SWEEP, "v_bias": V_BIAS_SWEEP, "test_bits": SYMS_PER_WORD*NUM_WORDS*TEST_CYCLES, "ber": ber, "one_to_zero": one_to_zero, "zero_to_one": zero_to_one}
+    save_data = {"timestamp": timestamp, "current_magnet": 0.25, "bitrate": BIT_RATE, "awg_fsamp": AWG_FSAMP, "daq_fsamp": DAQ_FSAMP, "v_input": V_INPUT_SWEEP, "v_bias": V_BIAS_SWEEP, "test_bits": SYMS_PER_WORD*NUM_WORDS*TEST_CYCLES, "ber": ber, "one_to_zero": one_to_zero, "zero_to_one": zero_to_one}
     mat = sio.savemat(f"memory_cell_{timestamp}.mat", save_data)
 
 

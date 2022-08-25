@@ -16,7 +16,7 @@ CHANNELS = [1, 2, 3, 4]
 #CHANNELS = [1, 2]
 DELAYS = [0, 0, 0, 0] # delay in ns
 #DELAYS = [0, 0] # delay in ns
-AMPLITUDE = [0.1, -2.5, 0.5, 0.5]
+AMPLITUDE = [0.1, 2.5, 0.5, 0.5]
 
 WAVEFORM = [
     [0.5, 1, 0.7, 0.2], # best (low ripple pulse) we have so far: 2.3ns FWHM
@@ -63,7 +63,7 @@ else:
     for n,channel in enumerate(CHANNELS):
         awg_mask += 2**(channel-1)
         module.channelWaveShape(channel, keysightSD1.SD_Waveshapes.AOU_AWG)
-        module.channelAmplitude(channel, -AMPLITUDE[n])
+        module.channelAmplitude(channel, AMPLITUDE[n])
         if channel == 2:
             module.channelOffset(channel, -1.5)
         # very important, behavior seems wonky if the AWG queue fills up

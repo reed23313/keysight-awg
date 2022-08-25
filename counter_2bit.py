@@ -368,7 +368,3 @@ if SAVE == 1:
     # save_data = {"ch1": daq_data[0], "ch2": daq_data[1], "ch3": daq_data[2], "ch4": daq_data[3], "tvec": tvec, "peaks1": peaks1, "peaks2": peaks2, "peaks3": peaks3, "peaks4": peaks4}
     save_data = {"tvec_awg": tvec_awg, "tvec_daq": tvec_daq-delay, "peaks1": peaks1, "peaks2": peaks2, "peaks3": peaks3, "peaks4": peaks4, "vin_bias123": TEST_CONFIGURATIONS, "freq": BIT_RATE}
     mat = sio.savemat(f"counter1bit_20Mhz_{timestamp}.mat", save_data)
-
-
-
-

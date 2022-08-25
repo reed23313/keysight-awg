@@ -272,5 +272,3 @@ axs[0].set_ylabel("V [V]")
 # axs[1].set_ylabel("V [V]")
 fig.tight_layout()
 plt.show()
-
-
