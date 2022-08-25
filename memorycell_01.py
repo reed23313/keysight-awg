@@ -26,8 +26,6 @@ from keysightSD1 import AIN_Impedance as imp
 from keysightSD1 import AIN_Coupling as cpl
 from keysightSD1 import SD_TriggerModes as trg
 
-# use AWG to mimic SNSPD pulse
-# snspd_pulse = sio.loadmat('csvs/SPG717_sr2loop_noinput_clk1_shunt123_ntron_shiftreg_2loop_no_input_2022-05-17 17-33-06.mat')['C4y'][1,3500:3700]
 # for savefiles
 timestamp = ''.join('_'.join(str(datetime.datetime.now()).split('.')[0].split(' ')).split(':'))
 print(timestamp)
@@ -95,60 +93,29 @@ V_INPUT_SWEEP = np.linspace(V_IN_READ_MIN,V_IN_READ_MAX,N_VINPUT)
 V_BIAS_SWEEP = np.linspace(V_BIAS_MIN,V_BIAS_MAX,N_VBIAS)
 
 ########################
-AWG_TSAMP = 1e-9 # 1GS/s
 AWG_CHANNELS = [1, 2, 3]
-#AWG_DELAYS = [0, 2, 7, 12] # delay in ns
-
-# AWG_BUFFER_LENGTH = 1000 # number of samples to hold in buffer# AWG constants
 
 # DAQ constants
-DAQ_TSAMP = 2e-9 # 500MS/s
-DAQ_CHANNELS = [1,2]
-DAQ_CYCLES = 1 # number of acquisition cycles/frames
-DAQ_TRIG_DELAY = 180 # set the delay until capturing samples from when the trigger condition is met
-DAQ_FULL_SCALE = [1,1,1] # full scale in V
+DAQ_CHANNELS = [1, 2]
+DAQ_TRIG_DELAY = 184 # set the delay until capturing samples from when the trigger condition is met
+DAQ_FULL_SCALE = [1, 1, 1, 1] # full scale in V
 DAQ_IMPEDANCE = [imp.AIN_IMPEDANCE_50, imp.AIN_IMPEDANCE_50, imp.AIN_IMPEDANCE_50, imp.AIN_IMPEDANCE_50]
 DAQ_COUPLING = [cpl.AIN_COUPLING_DC, cpl.AIN_COUPLING_DC, cpl.AIN_COUPLING_DC, cpl.AIN_COUPLING_DC]
 
 
 AWG_FSAMP = int(1e9) # 1GS/s
 DAQ_FSAMP = int(500e6) # 500MS/s
+# oversampling rate of AWG vs DAQ
+# symbol period in AWG samples must be a multiple of AWG_OSR
+# so that the number of DAQ samples in a symbol period is an integer
+AWG_OSR = AWG_FSAMP//DAQ_FSAMP
 BIT_RATE = int(10e6) # sym/s (maybe up to 150MHz; 100MHz looks good however)
+# choose the pulse shape from pulse_lib.py
 PULSE_SHAPE = AWG_SHORT_PULSES[0]
 # PULSE_SHAPE = AWG_LONG_PULSE
-INPUT_DELAY = int(1e9/(2*BIT_RATE))
+INPUT_DELAY = 1e9//(2*BIT_RATE)) # delay input signal by 1/2 of symbol period (relative to read clock)
 AWG_DELAYS = [INPUT_DELAY, 0, 0] # delay in ns
 ########################
-
-# V_INPUT_SWEEP = np.linspace(AWG_OPTIMAL_AMPLITUDES[0], AWG_OPTIMAL_AMPLITUDES[0], N_VINPUT)
-# V_BIAS_SWEEP = np.linspace(AWG_OPTIMAL_AMPLITUDES[1], AWG_OPTIMAL_AMPLITUDES[1], N_VBIAS)
-#V_CLKSH_SWEEP = np.linspace(AWG_OPTIMAL_AMPLITUDES[2], AWG_OPTIMAL_AMPLITUDES[2], N_VCLKSH)
-#V_CLKRO_SWEEP = np.linspace(AWG_OPTIMAL_AMPLITUDES[3], AWG_OPTIMAL_AMPLITUDES[3], N_VCLKRO)
-#V_CLKSH_SWEEP = np.linspace(0.25, 0.31, N_VCLKSH) # sweeps for 100MHz
-#V_CLKRO_SWEEP = np.linspace(0.72, 0.78, N_VCLKRO)
-#V_CLKSH_SWEEP = np.linspace(0.20, 0.44, N_VCLKSH) # sweeps for 10MHz (narrow)
-#V_CLKRO_SWEEP = np.linspace(0.60, 0.90, N_VCLKRO)
-#V_CLKSH_SWEEP = np.linspace(0.10, 0.60, N_VCLKSH) # sweeps for 10MHz (wide)
-#V_CLKRO_SWEEP = np.linspace(0.50, 1.20, N_VCLKRO)
-##################
-# V_CLKSH_SWEEP = np.linspace(0.25, 0.50, N_VCLKSH) # sweeps for 75MHz
-# V_CLKRO_SWEEP = np.linspace(0.50, 0.90, N_VCLKRO)
-##################
-#V_CLKSH_SWEEP = np.linspace(0.25, 0.50, N_VCLKSH) # sweeps for 50MHz
-#V_CLKRO_SWEEP = np.linspace(0.50, 0.90, N_VCLKRO)
-#V_CLKSH_SWEEP = np.linspace(0.10, 0.60, N_VCLKSH) # sweeps for 25MHz
-#V_CLKRO_SWEEP = np.linspace(0.50, 1.20, N_VCLKRO)
-
-# generate configs
-# N_CONFIGS = N_VINPUT*N_VBIAS
-# TEST_CONFIGURATIONS = np.zeros((N_CONFIGS,4))
-# i = 0
-# for v_input in V_INPUT_SWEEP:
-#     for v_clk_in in V_BIAS_SWEEP:
-#         for v_clk_sh in V_CLKSH_SWEEP:
-#             for v_clk_ro in V_CLKRO_SWEEP:
-#                 TEST_CONFIGURATIONS[i,:] = np.array([v_input, v_clk_in, v_clk_sh, v_clk_ro])
-#                 i = i + 1
 
 N_CONFIGS = N_VINPUT*N_VBIAS
 TEST_CONFIGURATIONS = np.zeros((N_CONFIGS,3))
@@ -158,35 +125,17 @@ for v_in in V_INPUT_SWEEP:
         TEST_CONFIGURATIONS[i,:] = np.array([v_in, v_in, v_bias])
         i = i + 1
 
-# # AWG constants
-# AWG_FSAMP = int(1e9) # 1GS/s
-# AWG_CHANNELS = [1, 2, 3, 4]
-# AWG_DELAYS = [0, 0, int(1e9/(2*BIT_RATE)), int(1e9/BIT_RATE)] # delay in ns
-
-# # DAQ constants
-# DAQ_FSAMP = int(500e6) # 500MS/s
-# DAQ_CHANNELS = [3]
-# #DAQ_CHANNELS = [1, 2, 3]
-# # set the delay until capturing samples from when the trigger condition is met
-# # 184 samples seems to be an intrinsic delay between when the DAQ and AWG start given the PXI bus trigger from the DAQ
-# DAQ_TRIG_DELAY = 184
-# #DAQ_FULL_SCALE = [0.125, 0.125, 0.125] # full scale in V
-# DAQ_FULL_SCALE = [1, 1, 1] # full scale in V
-# DAQ_IMPEDANCE = [imp.AIN_IMPEDANCE_50, imp.AIN_IMPEDANCE_50, imp.AIN_IMPEDANCE_50, imp.AIN_IMPEDANCE_50]
-# DAQ_COUPLING = [cpl.AIN_COUPLING_DC, cpl.AIN_COUPLING_DC, cpl.AIN_COUPLING_DC, cpl.AIN_COUPLING_DC]
-
-def make_word(value, bits, pulse, freq, fs):
-    period_samples = int(fs)//int(freq)
-    if len(pulse) > period_samples:
-        raise ValueError(f"frequency {freq} is too high for the selected pulse length of {len(pulse)} at sample rate {fs}")
+def make_word(value, bits, pulse, symbol_size):
+    if len(pulse) > symbol_size
+        raise ValueError(f"symbol size ({symbol_size} samples) is too small for the selected pulse length of {len(pulse)}")
     word = []
     for i in range(bits):
         if value & 1:
             # binary 1
-            word += pulse + [0]*(period_samples - len(pulse))
+            word += pulse + [0]*(symbol_size - len(pulse))
         else:
             # binary 0
-            word += [0]*period_samples
+            word += [0]*symbol_size
         value >>= 1
     return word
 
@@ -202,16 +151,16 @@ else:
     TEST_CYCLES = 1 # 1Msamp
     NUM_WORDS = 1250 # should be suitably large enough so that we get good word entropy
 SYMS_PER_WORD = 8 # word size in symbols
-AWG_WORD_SIZE = SYMS_PER_WORD*(AWG_FSAMP//BIT_RATE) # word size in samples
-DAQ_WORD_SIZE = SYMS_PER_WORD*(DAQ_FSAMP//BIT_RATE) # word size in samples
+DAQ_SYMBOL_SIZE = DAQ_FSAMP//BIT_RATE # symbol size in samples
+AWG_SYMBOL_SIZE = AWG_OSR*DAQ_SYMBOL_SIZE # symbol size in samples
+AWG_WORD_SIZE = SYMS_PER_WORD*AWG_SYMBOL_SIZE # word size in samples
+DAQ_WORD_SIZE = SYMS_PER_WORD*DAQ_SYMBOL_SIZE # word size in samples
 AWG_BUFFER_SIZE = NUM_WORDS*AWG_WORD_SIZE # buffer size in samples
 DAQ_BUFFER_SIZE = NUM_WORDS*DAQ_WORD_SIZE
-PULSE_SHAPE = AWG_SHORT_PULSES[0]
-#PULSE_SHAPE = AWG_LONG_PULSE
 input_signal = np.zeros(AWG_BUFFER_SIZE)
 read_signal = np.zeros(AWG_BUFFER_SIZE)
 bits = np.zeros(NUM_WORDS*SYMS_PER_WORD)
-read_word = make_word(2**SYMS_PER_WORD-1, SYMS_PER_WORD, PULSE_SHAPE, BIT_RATE, AWG_FSAMP)
+read_word = make_word(2**SYMS_PER_WORD-1, SYMS_PER_WORD, PULSE_SHAPE, AWG_SYMBOL_SIZE)
 # generate test vectors
 for i in range(NUM_WORDS):
     val = random.randint(0, 2**(SYMS_PER_WORD-1))
@@ -219,7 +168,7 @@ for i in range(NUM_WORDS):
         # send 0 for the last word so next cycle doesn't have an accidental bit flip at the beginning due to a held over circulating current
         # i.e., make sure that there are an equal number of pulses for each channel
         val = 0
-    input_signal[i*AWG_WORD_SIZE:(i+1)*AWG_WORD_SIZE] = make_word(val, SYMS_PER_WORD, PULSE_SHAPE, BIT_RATE, AWG_FSAMP)
+    input_signal[i*AWG_WORD_SIZE:(i+1)*AWG_WORD_SIZE] = make_word(val, SYMS_PER_WORD, PULSE_SHAPE, AWG_SYMBOL_SIZE)
     for b in range(SYMS_PER_WORD):
         bits[i*SYMS_PER_WORD + b] = val & 1
         val >>= 1
@@ -266,7 +215,7 @@ try:
     for n in range(len(DAQ_CHANNELS)):
         daq_data[n] = (daq_data[n]/2**15)*DAQ_FULL_SCALE[n]
         daq_lpf = sigproc.lfilter(FILT_B, FILT_A, daq_data[n])
-        energy = np.trapz(np.square(np.reshape(daq_lpf, (NUM_WORDS*SYMS_PER_WORD,DAQ_FSAMP//BIT_RATE))), axis=1)
+        energy = np.trapz(np.square(np.reshape(daq_lpf, (NUM_WORDS*SYMS_PER_WORD,DAQ_SYMBOL_SIZE))), axis=1)
         noise_stddev[n] = np.std(daq_data[n])
         noise_maxabs[n] = np.max(np.abs(daq_data[n]))
         energy_stddev[n] = np.std(energy)
@@ -351,7 +300,7 @@ if DEBUG_OPTIMAL_AMPLITUDES or DEBUG_DELAY_CALC:
     daq_lpf_energy_offset = 0
     for n in range(len(DAQ_CHANNELS)):
         daq_lpf = sigproc.lfilter(FILT_B, FILT_A, daq_data[n])
-        energy = np.trapz(np.square(np.reshape(daq_lpf, (NUM_WORDS*SYMS_PER_WORD,DAQ_FSAMP//BIT_RATE))), axis=1)
+        energy = np.trapz(np.square(np.reshape(daq_lpf, (NUM_WORDS*SYMS_PER_WORD,DAQ_SYMBOL_SIZE))), axis=1)
         time_ax[1].plot(tvec_daq/t_units, daq_offset - max(daq_data[n]) + daq_data[n], label = f"DAQ {DAQ_CHANNELS[n]}")
         #time_ax[2].plot(tvec_daq/t_units, daq_lpf_offset - max(daq_lpf) + daq_lpf, label = f"lpf(DAQ {DAQ_CHANNELS[n]})")
         #time_ax[3].step(tvec_energy/t_units, daq_lpf_energy_offset - max(energy) + energy, label = f"<lpf(DAQ {DAQ_CHANNELS[n]})^2>")
@@ -445,13 +394,10 @@ try:
             #threshold = zscore*noise_stddev[n]
             threshold = 0.3*np.max(daq_data[n])
             #threshold = 20*energy_stddev[n]
-            #daq_lpf = sigproc.lfilter(FILT_B, FILT_A, daq_data_delayed[n])
-            #energy = np.trapz(np.square(np.reshape(daq_lpf, (NUM_WORDS*SYMS_PER_WORD*TEST_CYCLES,DAQ_FSAMP//BIT_RATE))), axis=1)
-            #daq_symbols = energy > threshold
             # get peaks and then bin each peak into a symbol location/time
             # allow 3/4 of a clock/symbol period of separation between peaks
             peaks, _ = sigproc.find_peaks(daq_data[n], height=threshold, distance=(7*DAQ_FSAMP)//(8*BIT_RATE))
-            daq_symbols[(peaks - lags[n]) // (DAQ_FSAMP//BIT_RATE)] = 1
+            daq_symbols[(peaks - lags[n]) // DAQ_SYMBOL_SIZE] = 1
             long_bits = np.tile(bits, TEST_CYCLES)
             zero_to_one[cfg,n] = np.sum(long_bits < daq_symbols)
             one_to_zero[cfg,n] = np.sum(long_bits > daq_symbols)
