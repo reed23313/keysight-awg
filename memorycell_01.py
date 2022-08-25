@@ -449,6 +449,7 @@ with open(f'csvs/shiftreg_ber_{int(BIT_RATE/1e6)}MHz_{timestamp}.npy', 'wb') as 
         f,
         timestamp=timestamp,
         bitrate=BIT_RATE,
+        true_bitrate=DAQ_FSAMP/DAQ_SYMBOL_SIZE,
         awg_fsamp=AWG_FSAMP,
         daq_fsamp=DAQ_FSAMP,
         v_input=V_INPUT_SWEEP,
@@ -463,8 +464,8 @@ with open(f'csvs/shiftreg_ber_{int(BIT_RATE/1e6)}MHz_{timestamp}.npy', 'wb') as 
 if SAVE == 1:
     print("saving results")
     # save_data = {"ch1": daq_data[0], "ch2": daq_data[1], "ch3": daq_data[2], "ch4": daq_data[3], "tvec": tvec, "peaks1": peaks1, "peaks2": peaks2, "peaks3": peaks3, "peaks4": peaks4}
-    save_data = {"timestamp": timestamp, "current_magnet": 0.25, "bitrate": BIT_RATE, "awg_fsamp": AWG_FSAMP, "daq_fsamp": DAQ_FSAMP, "v_input": V_INPUT_SWEEP, "v_bias": V_BIAS_SWEEP, "test_bits": SYMS_PER_WORD*NUM_WORDS*TEST_CYCLES, "ber": ber, "one_to_zero": one_to_zero, "zero_to_one": zero_to_one}
-    mat = sio.savemat(f"memory_cell_{timestamp}.mat", save_data)
+    save_data = {"timestamp": timestamp, "true_bitrate": DAQ_FSAMP/DAQ_SYMBOL_SIZE, "current_magnet": 0.25, "bitrate": BIT_RATE, "awg_fsamp": AWG_FSAMP, "daq_fsamp": DAQ_FSAMP, "v_input": V_INPUT_SWEEP, "v_bias": V_BIAS_SWEEP, "test_bits": SYMS_PER_WORD*NUM_WORDS*TEST_CYCLES, "ber": ber, "one_to_zero": one_to_zero, "zero_to_one": zero_to_one}
+    mat = sio.savemat(f"csvs/memory_cell_ber_{timestamp}.mat", save_data)
 
 
             
@@ -481,12 +482,12 @@ if not(DEBUG_BER_PLOT):
     t = np.logspace(np.ceil(np.log10(ber_min)), 0, 5)
     cb = fig.colorbar(im, ax=ax)
     cb.set_label('BER')
-    ax.set_title(f'Bit error rate {round(SYMS_PER_WORD*NUM_WORDS*TEST_CYCLES/1e6,3)}MS at {int(BIT_RATE/1e6)}MS/s ({timestamp}) threshold = max')
+    ax.set_title(f'Bit error rate {round(SYM6_PER_WORD*NUM_WORDS*TEST_CYCLES/1e3,3)}kS at {round(DAQ_FSAMP/DAQ_SYMBOL_SIZE/1e6,2)}MS/s ({timestamp}) threshold = max')
     ax.set_xticks((N_VINPUT//4)*np.arange(5), np.round(V_INPUT_SWEEP[::(N_VINPUT//4)]*1e3).astype(np.int32))
     ax.set_yticks((N_VBIAS//4)*np.arange(5), np.round(V_BIAS_SWEEP[::(N_VBIAS//4)]*1e3).astype(np.int32))
     ax.set_xlabel("V_input [mV]")
     ax.set_ylabel("V_bias [mV]")
-    plt.savefig(f'csvs/shiftreg_ber_{int(BIT_RATE/1e6)}MHz_{timestamp}.png', bbox_inches='tight')
+    plt.savefig(f'csvs/memory_cell_ber_{int(BIT_RATE/1e6)}MHz_{timestamp}.png', bbox_inches='tight')
     plt.show()
     # very important to close AWG, otherwise the buffers will not get properly flushed
     print("closing AWG and DAQ")
