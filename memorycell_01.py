@@ -113,7 +113,7 @@ BIT_RATE = int(10e6) # sym/s (maybe up to 150MHz; 100MHz looks good however)
 # choose the pulse shape from pulse_lib.py
 PULSE_SHAPE = AWG_SHORT_PULSES[0]
 # PULSE_SHAPE = AWG_LONG_PULSE
-INPUT_DELAY = 1e9//(2*BIT_RATE)) # delay input signal by 1/2 of symbol period (relative to read clock)
+INPUT_DELAY = 1e9//(2*BIT_RATE) # delay input signal by 1/2 of symbol period (relative to read clock)
 AWG_DELAYS = [INPUT_DELAY, 0, 0] # delay in ns
 ########################
 
@@ -126,7 +126,7 @@ for v_in in V_INPUT_SWEEP:
         i = i + 1
 
 def make_word(value, bits, pulse, symbol_size):
-    if len(pulse) > symbol_size
+    if len(pulse) > symbol_size:
         raise ValueError(f"symbol size ({symbol_size} samples) is too small for the selected pulse length of {len(pulse)}")
     word = []
     for i in range(bits):
