@@ -30,6 +30,9 @@ from keysightSD1 import SD_TriggerModes as trg
 timestamp = ''.join('_'.join(str(datetime.datetime.now()).split('.')[0].split(' ')).split(':'))
 print(timestamp)
 
+dev_name = 'flipflop'
+print(dev_name)
+
 # make plots nicer
 t_units = 1e-9
 siprefix = {
@@ -43,11 +46,11 @@ class LagException(Exception):
     pass
 
 CHASSIS = 1
-SAVE = 0
+SAVE = 1
 
 # debug options
 PLOT_RESULTS = False
-DEBUG_OPTIMAL_AMPLITUDES = False
+DEBUG_OPTIMAL_AMPLITUDES = True
 SAVE_TRANSIENT = False
 DEBUG_DELAY_CALC = False
 DEBUG_BER_PLOT = False
@@ -57,15 +60,16 @@ DEBUG_BER = 0.01
 
 # determine these by setting DEBUG_OPTIMAL_AMPLITUDES = True
 # Vinput, Vclkin, Vclksh, Vclkro
-# AWG_OPTIMAL_AMPLITUDES = [0.3, 0.3, 0.4]      # for 10 MHz
+BIAS_AWG_OFFSETS = [1.5, 1.5]
+SIGNAL_AWG_OPTIMAL_AMPLITUDES = [1.5, 1.5, 1.5]      # for 10 MHz
 # AWG_OPTIMAL_AMPLITUDES = [0.3, 0.3, 0.4]        # for 25 MHz
 #AWG_OPTIMAL_AMPLITUDES = [0.34, 0.34, 0.25]    # for 75 MHz
-AWG_OPTIMAL_AMPLITUDES = [0.4, 0.4, 0.2]    # for 100 MHz
+# AWG_OPTIMAL_AMPLITUDES = [0.4, 0.4, 0.2]    # for 100 MHz
 # "current source" impedance:
 # 1.96k, 1.96k, 1.96k, 11k
 # clock amplitude sweeps
-N_VINPUT = 75#51
-N_VBIAS = 35# 51
+N_VINPUT = 91#51
+N_VBIAS = 52# 51
 # N_VINPUT = 1
 # N_VBIAS = 1
 #N_VCLKSH = 16
@@ -83,8 +87,8 @@ N_VBIAS = 35# 51
 # for 75MHz
 V_IN_READ_MIN = 0.0
 V_IN_READ_MAX = 1.5
-V_BIAS_MIN = 0.1
-V_BIAS_MAX = 0.8
+V_BIAS_MIN = 0.0
+V_BIAS_MAX = 0.85
 # V_IN_READ_MIN = 0.34
 # V_IN_READ_MAX = 0.34
 # V_BIAS_MIN = 0.25
@@ -93,10 +97,11 @@ V_INPUT_SWEEP = np.linspace(V_IN_READ_MIN,V_IN_READ_MAX,N_VINPUT)
 V_BIAS_SWEEP = np.linspace(V_BIAS_MIN,V_BIAS_MAX,N_VBIAS)
 
 ########################
-AWG_CHANNELS = [1, 2, 3]
+SIGNAL_AWG_CHANNELS = [1, 2, 3]
+BIAS_AWG_CHANNELS = [1, 2]
 
 # DAQ constants
-DAQ_CHANNELS = [1, 2]
+DAQ_CHANNELS = [1, 2, 3]
 DAQ_TRIG_DELAY = 184 # set the delay until capturing samples from when the trigger condition is met
 DAQ_FULL_SCALE = [1, 1, 1, 1] # full scale in V
 DAQ_IMPEDANCE = [imp.AIN_IMPEDANCE_50, imp.AIN_IMPEDANCE_50, imp.AIN_IMPEDANCE_50, imp.AIN_IMPEDANCE_50]
@@ -110,19 +115,21 @@ DAQ_FSAMP = int(500e6) # 500MS/s
 # so that the number of DAQ samples in a symbol period is an integer
 AWG_OSR = AWG_FSAMP//DAQ_FSAMP
 BIT_RATE = int(10e6) # sym/s (maybe up to 150MHz; 100MHz looks good however)
+MAGNET_CURRENT = 0 # current in A
 # choose the pulse shape from pulse_lib.py
 PULSE_SHAPE = AWG_SHORT_PULSES[0]
 # PULSE_SHAPE = AWG_LONG_PULSE
-INPUT_DELAY = 1e9//(2*BIT_RATE) # delay input signal by 1/2 of symbol period (relative to read clock)
-AWG_DELAYS = [INPUT_DELAY, 0, 0] # delay in ns
+# the bit rate is forced to a frequency which has a integer number of DAQ samples
+PERIOD = (DAQ_FSAMP//BIT_RATE)/DAQ_FSAMP
+AWG_DELAYS = [0, int(1e9*PERIOD/2), int(1e9*PERIOD)] # delay in ns
 ########################
 
 N_CONFIGS = N_VINPUT*N_VBIAS
-TEST_CONFIGURATIONS = np.zeros((N_CONFIGS,3))
+TEST_CONFIGURATIONS = np.zeros((N_CONFIGS,2))
 i = 0
 for v_in in V_INPUT_SWEEP:
     for v_bias in V_BIAS_SWEEP:
-        TEST_CONFIGURATIONS[i,:] = np.array([v_in, v_in, v_bias])
+        TEST_CONFIGURATIONS[i,:] = np.array([v_in, v_bias])
         i = i + 1
 
 def make_word(value, bits, pulse, symbol_size):
@@ -138,9 +145,6 @@ def make_word(value, bits, pulse, symbol_size):
             word += [0]*symbol_size
         value >>= 1
     return word
-
-# filter parameters for bit error rate calculations
-FILT_B, FILT_A = sigproc.butter(1, DAQ_FSAMP/5, fs=DAQ_FSAMP, btype='low', analog=False)
 
 # test vector parameters
 # BER calculation takes roughly 120ms per channel per 1Msamp
@@ -176,71 +180,48 @@ for i in range(NUM_WORDS):
     read_signal[i*AWG_WORD_SIZE:(i+1)*AWG_WORD_SIZE] = read_word
 
 # add AWG and DAQ channels
-awg = pxi_modules.AWG("M3202A", 1, 5, AWG_BUFFER_SIZE)
+signal_awg = pxi_modules.AWG("M3202A", 1, 5, AWG_BUFFER_SIZE)
+bias_awg = pxi_modules.AWG("M3201A", 1, 6, DAQ_BUFFER_SIZE)
 daq = pxi_modules.DAQ("M3102A", 1, 7, DAQ_BUFFER_SIZE, TEST_CYCLES)
-awg.add_channels(AWG_CHANNELS)
+signal_awg.add_channels(SIGNAL_AWG_CHANNELS)
+bias_awg.add_channels(BIAS_AWG_CHANNELS)
 daq.add_channels(DAQ_CHANNELS, DAQ_FULL_SCALE, DAQ_IMPEDANCE, DAQ_COUPLING)
 
 # set up triggering modes
 # by default, use EXTTRIG (or EXTTRIG_CYCLE in the case of the AWG) to allow
 # for synchronization of the AWG and DAQ so no samples are lost/missed
-awg.set_trigger_mode(trg.EXTTRIG_CYCLE)
+signal_awg.set_trigger_mode(trg.EXTTRIG_CYCLE)
+bias_awg.set_trigger_mode(trg.EXTTRIG_CYCLE)
 daq.set_trigger_mode(trg.EXTTRIG, trigger_delay = DAQ_TRIG_DELAY)
 
-noise_stddev = np.zeros(len(DAQ_CHANNELS))
-noise_maxabs = np.zeros(len(DAQ_CHANNELS))
-energy_stddev = np.zeros(len(DAQ_CHANNELS))
 lags = np.zeros(len(DAQ_CHANNELS), dtype=np.int32)
 
 # get noise level of DAQ inputs and measure cable delay
 try:
     daq.set_capture_cycles(1)
-    # first send a bunch of zeros to check noise level on DAQ inputs
-    for n,c in enumerate(AWG_CHANNELS):
+    for n,c in enumerate(SIGNAL_AWG_CHANNELS):
         # set capture sizes and cycle counts so we don't gather too much data
         # weird bugs happen when changing the DAQ capture points,
         # so just decrease the number of capture cycles
         # set delays and amplitudes to zero; we don't want to send any data
-        awg.set_channel_delay(c, AWG_DELAYS[n])
-        if True:#c == 1:
-            awg.set_channel_amplitude(c, 0)
-            awg.set_buffer_contents(c, np.zeros(AWG_BUFFER_SIZE))
-        else:
-            awg.set_channel_amplitude(c, AWG_OPTIMAL_AMPLITUDES[n])
-            awg.set_buffer_contents(c, read_signal)
-    # actually capture noise data
-    awg.launch_channels(sum(2**(c-1) for c in AWG_CHANNELS), 1)
-    daq_data = daq.capture(sum(2**(c-1) for c in DAQ_CHANNELS))
-    # unit conversion to V and get noise properties
-    for n in range(len(DAQ_CHANNELS)):
-        daq_data[n] = (daq_data[n]/2**15)*DAQ_FULL_SCALE[n]
-        daq_lpf = sigproc.lfilter(FILT_B, FILT_A, daq_data[n])
-        energy = np.trapz(np.square(np.reshape(daq_lpf, (NUM_WORDS*SYMS_PER_WORD,DAQ_SYMBOL_SIZE))), axis=1)
-        noise_stddev[n] = np.std(daq_data[n])
-        noise_maxabs[n] = np.max(np.abs(daq_data[n]))
-        energy_stddev[n] = np.std(energy)
-    # then send a frame of random samples to determine the lag
-    # for each channel (due to lightspeed delay of coax)
-    bias_zerobits = np.zeros(AWG_BUFFER_SIZE)
-
-    for n,c in enumerate(AWG_CHANNELS):
+        signal_awg.set_channel_delay(c, AWG_DELAYS[n])
+        signal_awg.set_channel_amplitude(c, SIGNAL_AWG_OPTIMAL_AMPLITUDES[n])
         if c == 1:
-            awg.set_channel_delay(c, AWG_DELAYS[n])
-            awg.set_channel_amplitude(c, AWG_OPTIMAL_AMPLITUDES[n])
-            awg.set_buffer_contents(c, input_signal)
-        if c == 2:
-            awg.set_channel_delay(c, AWG_DELAYS[n])
-            awg.set_channel_amplitude(c, AWG_OPTIMAL_AMPLITUDES[n])
-            awg.set_buffer_contents(c, read_signal)
-        if c == 3:
-            awg.set_channel_delay(c, AWG_DELAYS[n])
-            awg.set_channel_offset(c, AWG_OPTIMAL_AMPLITUDES[n])
-            awg.set_channel_amplitude(c, 0)
-            awg.set_buffer_contents(c, bias_zerobits)
-
-    # capture lag data
-    awg.launch_channels(sum(2**(c-1) for c in AWG_CHANNELS), 1)
+            signal_awg.set_buffer_contents(c, input_signal)
+        else:
+            signal_awg.set_buffer_contents(c, read_signal)
+    for n,c in enumerate(BIAS_AWG_CHANNELS):
+        # set capture sizes and cycle counts so we don't gather too much data
+        # weird bugs happen when changing the DAQ capture points,
+        # so just decrease the number of capture cycles
+        # set delays and amplitudes to zero; we don't want to send any data
+        bias_awg.set_channel_amplitude(c, 0)
+        bias_awg.set_channel_offset(c, BIAS_AWG_OFFSETS[n])
+    # actually capture noise data
+    signal_awg.launch_channels(sum(2**(c-1) for c in SIGNAL_AWG_CHANNELS), 1)
+    bias_awg.launch_channels(sum(2**(c-1) for c in SIGNAL_AWG_CHANNELS), 1)
     daq_data = daq.capture(sum(2**(c-1) for c in DAQ_CHANNELS))
+    input("press any key to continue")
     for n in range(len(DAQ_CHANNELS)):
         # unit conversion to V
         daq_data[n] = (daq_data[n]/2**15)*DAQ_FULL_SCALE[n]
@@ -256,29 +237,28 @@ try:
 except pxi_modules.KeysightException as e:
     print("Encountered fatal exception when commanding Keysight equipment, exiting now")
     print(e)
-    awg.stop()
+    signal_awg.stop()
+    bias_awg.stop()
     daq.stop()
     exit()
 except LagException as e:
     print("Encountered fatal exception when calculating lag")
     print(e)
-    awg.stop()
-    daq.stop()
+    signal_awg.stop()
+    bias_awg.stop()
     exit()
 
 if SAVE_TRANSIENT:
-    with open(f'csvs/shiftreg_transient_{int(BIT_RATE/1e6)}MHz_{timestamp}.npy', 'wb') as f:
+    with open(f'csvs/{dev_name}/{dev_name}_transient_{int(BIT_RATE/1e6)}MHz_{timestamp}.npy', 'wb') as f:
         np.savez(
             f,
             timestamp=timestamp,
             bitrate=BIT_RATE,
             awg_fsamp=AWG_FSAMP,
             daq_fsamp=DAQ_FSAMP,
-            v_input=AWG_OPTIMAL_AMPLITUDES[0],
-            v_clkin=AWG_OPTIMAL_AMPLITUDES[1],
-            v_clksh=AWG_OPTIMAL_AMPLITUDES[2],
-            v_clkro=AWG_OPTIMAL_AMPLITUDES[3],
-            awg_waveforms=awg.waveforms,
+            signal_amplitudes=SIGNAL_AWG_OPTIMAL_AMPLITUDES,
+            bias_offsets=BIAS_AWG_OFFSETS,
+            awg_waveforms=signal_awg.waveforms,
             daq_data=daq_data
             )
 tvec_daq = np.linspace(0,(DAQ_BUFFER_SIZE*TEST_CYCLES-1)/DAQ_FSAMP,DAQ_BUFFER_SIZE*TEST_CYCLES)
@@ -291,28 +271,17 @@ if DEBUG_OPTIMAL_AMPLITUDES or DEBUG_DELAY_CALC:
     tvec_awg = np.linspace(0,(AWG_BUFFER_SIZE-1)/AWG_FSAMP,AWG_BUFFER_SIZE)
     tvec_energy = np.linspace(0,(SYMS_PER_WORD*NUM_WORDS-1)/BIT_RATE,NUM_WORDS*SYMS_PER_WORD)
     corr_fig, corr_ax = plt.subplots()
-    #time_fig, time_ax = plt.subplots(4,1,sharex=True)
     time_fig, time_ax = plt.subplots(2,1,sharex=True)
-    for n in range(len(AWG_CHANNELS)):
-        time_ax[0].plot(tvec_awg/t_units, (len(AWG_CHANNELS) - n - 1) + awg.waveforms[n]*0.9, label = f"AWG {AWG_CHANNELS[n]}")
+    for n in range(len(SIGNAL_AWG_CHANNELS)):
+        time_ax[0].plot(tvec_awg/t_units, (len(SIGNAL_AWG_CHANNELS) - n - 1) + signal_awg.waveforms[n]*0.9, label = f"AWG {SIGNAL_AWG_CHANNELS[n]}")
     daq_offset = 0
-    daq_lpf_offset = 0
-    daq_lpf_energy_offset = 0
     for n in range(len(DAQ_CHANNELS)):
-        daq_lpf = sigproc.lfilter(FILT_B, FILT_A, daq_data[n])
-        energy = np.trapz(np.square(np.reshape(daq_lpf, (NUM_WORDS*SYMS_PER_WORD,DAQ_SYMBOL_SIZE))), axis=1)
         time_ax[1].plot(tvec_daq/t_units, daq_offset - max(daq_data[n]) + daq_data[n], label = f"DAQ {DAQ_CHANNELS[n]}")
-        #time_ax[2].plot(tvec_daq/t_units, daq_lpf_offset - max(daq_lpf) + daq_lpf, label = f"lpf(DAQ {DAQ_CHANNELS[n]})")
-        #time_ax[3].step(tvec_energy/t_units, daq_lpf_energy_offset - max(energy) + energy, label = f"<lpf(DAQ {DAQ_CHANNELS[n]})^2>")
         daq_offset -= 1.2*(max(daq_data[n]) - min(daq_data[n]))
-        daq_lpf_offset -= 1.2*(max(daq_lpf) - min(daq_lpf))
-        daq_lpf_energy_offset -= 1.2*(max(energy) - min(energy))
         corr_ax.plot(corr_lags, n + corr / np.max(corr), label = f"corr(DAQ {n+1}, AWG {DAQ_CHANNELS[n]})")
     corr_ax.legend()
     time_ax[0].legend()
     time_ax[1].legend()
-    #time_ax[2].legend()
-    #time_ax[3].legend()
     time_ax[0].set_xlabel(f"t [{siprefix[t_units]}s]")
     time_ax[1].set_xlabel(f"t [{siprefix[t_units]}s]")
     corr_ax.set_xlabel(f"samples")
@@ -320,12 +289,10 @@ if DEBUG_OPTIMAL_AMPLITUDES or DEBUG_DELAY_CALC:
     time_ax[1].set_ylabel("V [V]")
     corr_ax.set_ylabel("corr")
     plt.show()
-print("noise levels (stddev) = ", noise_stddev)
-print("noise levels (maxabs) = ", noise_maxabs)
-print("energy levels (stddev) = ", energy_stddev)
 
 if DEBUG_OPTIMAL_AMPLITUDES:
-    awg.stop()
+    signal_awg.stop()
+    bias_awg.stop()
     daq.stop()
     exit()
 # reset capture cycles to original value
@@ -335,44 +302,44 @@ one_to_zero = np.zeros((N_CONFIGS,len(DAQ_CHANNELS)))
 zero_to_one = np.zeros((N_CONFIGS,len(DAQ_CHANNELS)))
 ber = np.zeros((N_CONFIGS,len(DAQ_CHANNELS)))
 # set up channel delays and waveforms
-for n,c in enumerate(AWG_CHANNELS):
-    awg.set_channel_delay(c, AWG_DELAYS[n])
+for n,c in enumerate(SIGNAL_AWG_CHANNELS):
+    signal_awg.set_channel_delay(c, AWG_DELAYS[n])
     if c == 1:
-        awg.set_buffer_contents(c, input_signal)
+        signal_awg.set_buffer_contents(c, input_signal)
     else:
-        awg.set_buffer_contents(c, read_signal)
+        signal_awg.set_buffer_contents(c, read_signal)
 try:
     t0 = time.time()
     for cfg in range(N_CONFIGS):
         amplitudes = TEST_CONFIGURATIONS[cfg]
         # set up amplitudes
         # clear bias
-        for c in AWG_CHANNELS:
-            awg.set_channel_offset(c, 0)
-            if c == 3:
-                awg.set_channel_amplitude(c, 0)
-            else:
-                awg.set_channel_amplitude(c, 0.5)
-        awg.launch_channels_start_only(sum(2**(c-1) for c in AWG_CHANNELS))
+        for c in SIGNAL_AWG_CHANNELS:
+            signal_awg.set_channel_amplitude(c, 0.5)
+        for c in BIAS_AWG_CHANNELS:
+            bias_awg.set_channel_amplitude(c, 0)
+            bias_awg.set_channel_offset(c, 0)
+        signal_awg.launch_channels_start_only(sum(2**(c-1) for c in SIGNAL_AWG_CHANNELS))
+        bias_awg.launch_channels_start_only(sum(2**(c-1) for c in BIAS_AWG_CHANNELS))
         # by default use PXI0 for everything
         PXI = 0
         daq.daq.PXItriggerWrite(PXI, 1)
         daq.daq.PXItriggerWrite(PXI, 0)
         daq.daq.PXItriggerWrite(PXI, 1)
-        for n,c in enumerate(AWG_CHANNELS):
-            if c == 3:  # bias line
-                awg.set_channel_amplitude(c, 0)     
-                awg.set_channel_offset(c, amplitudes[n])
-            else:       # input and read
-                awg.set_channel_amplitude(c, amplitudes[n])
-                awg.set_channel_offset(c, 0)     
+        for n,c in enumerate(SIGNAL_AWG_CHANNELS):
+            signal_awg.set_channel_amplitude(c, amplitudes[0])
+            signal_awg.set_channel_offset(c, 0)
+        for n,c in enumerate(BIAS_AWG_CHANNELS):
+            bias_awg.set_channel_amplitude(c, 0)
+            bias_awg.set_channel_offset(c, amplitudes[1])
 
         # capture data
         #awg.launch_channels(sum(2**(c-1) for c in AWG_CHANNELS), TEST_CYCLES)
         if cfg == 0:
-            awg.launch_channels(sum(2**(c-1) for c in AWG_CHANNELS), TEST_CYCLES)
+            signal_awg.launch_channels(sum(2**(c-1) for c in SIGNAL_AWG_CHANNELS), TEST_CYCLES)
         else:
-            awg.launch_channels_start_only(sum(2**(c-1) for c in AWG_CHANNELS))
+            signal_awg.launch_channels_start_only(sum(2**(c-1) for c in SIGNAL_AWG_CHANNELS))
+        bias_awg.launch_channels_start_only(sum(2**(c-1) for c in BIAS_AWG_CHANNELS))
         
         daq_data = daq.capture(sum(2**(c-1) for c in DAQ_CHANNELS))
         daq_data_delayed = np.zeros((len(DAQ_CHANNELS),DAQ_BUFFER_SIZE*TEST_CYCLES))
@@ -383,17 +350,12 @@ try:
         # calculate bit error rate
         #t0 = time.process_time()
         for n,channel in enumerate(DAQ_CHANNELS):
-            if channel != 1:
+            if channel != 3:
                 continue
-            # zscore reflects the SNR of the readout circuit --- 200-500 is suitable for loopback,
-            # but most likely a lower threshold (e.g. 20 sigma) will be needed for a real test
-            zscore = 20
             # if threshold is too high, then there will be incorrectly many 1->0 errors
             # if threshold is too low, then there will be incorrectly many 0->1 errors
             daq_symbols = np.zeros(SYMS_PER_WORD*NUM_WORDS*TEST_CYCLES)
-            #threshold = zscore*noise_stddev[n]
             threshold = 0.3*np.max(daq_data[n])
-            #threshold = 20*energy_stddev[n]
             # get peaks and then bin each peak into a symbol location/time
             # allow 3/4 of a clock/symbol period of separation between peaks
             peaks, _ = sigproc.find_peaks(daq_data[n], height=threshold, distance=(7*DAQ_FSAMP)//(8*BIT_RATE))
@@ -430,21 +392,23 @@ try:
 except pxi_modules.KeysightException as e:
     print("Encountered fatal exception when commanding Keysight equipment, exiting now")
     print(e)
-    awg.stop()
+    signal_awg.stop()
+    bias_awg.stop()
     daq.stop()
     exit()
 except (Exception, KeyboardInterrupt) as e:
     print("Caught generic exception, closing AWG/DAQ now")
     print(e)
     traceback.print_exc()
-    awg.stop()
+    signal_awg.stop()
+    bias_awg.stop()
     daq.stop()
     exit()
 
 print("num (1->0 errors) = ", one_to_zero)
 print("num (0->1 errors) = ", zero_to_one)
 print("BER = ", ber)
-with open(f'csvs/shiftreg_ber_{int(BIT_RATE/1e6)}MHz_{timestamp}.npy', 'wb') as f:
+with open(f'csvs/{dev_name}/{dev_name}_ber_{int(BIT_RATE/1e6)}MHz_{timestamp}.npy', 'wb') as f:
     np.savez(
         f,
         timestamp=timestamp,
@@ -455,6 +419,7 @@ with open(f'csvs/shiftreg_ber_{int(BIT_RATE/1e6)}MHz_{timestamp}.npy', 'wb') as 
         v_input=V_INPUT_SWEEP,
         v_bias=V_BIAS_SWEEP,
         test_bits=SYMS_PER_WORD*NUM_WORDS*TEST_CYCLES,
+        magnet_current=MAGNET_CURRENT,
         # zscore=zscore,
         ber=ber,
         one_to_zero=one_to_zero,
@@ -464,34 +429,44 @@ with open(f'csvs/shiftreg_ber_{int(BIT_RATE/1e6)}MHz_{timestamp}.npy', 'wb') as 
 if SAVE == 1:
     print("saving results")
     # save_data = {"ch1": daq_data[0], "ch2": daq_data[1], "ch3": daq_data[2], "ch4": daq_data[3], "tvec": tvec, "peaks1": peaks1, "peaks2": peaks2, "peaks3": peaks3, "peaks4": peaks4}
-    save_data = {"timestamp": timestamp, "true_bitrate": DAQ_FSAMP/DAQ_SYMBOL_SIZE, "current_magnet": 0.25, "bitrate": BIT_RATE, "awg_fsamp": AWG_FSAMP, "daq_fsamp": DAQ_FSAMP, "v_input": V_INPUT_SWEEP, "v_bias": V_BIAS_SWEEP, "test_bits": SYMS_PER_WORD*NUM_WORDS*TEST_CYCLES, "ber": ber, "one_to_zero": one_to_zero, "zero_to_one": zero_to_one}
-    mat = sio.savemat(f"csvs/memory_cell_ber_{timestamp}.mat", save_data)
+    save_data = {"timestamp": timestamp, "true_bitrate": DAQ_FSAMP/DAQ_SYMBOL_SIZE, "current_magnet": MAGNET_CURRENT, "bitrate": BIT_RATE, "awg_fsamp": AWG_FSAMP, "daq_fsamp": DAQ_FSAMP, "v_input": V_INPUT_SWEEP, "v_bias": V_BIAS_SWEEP, "test_bits": SYMS_PER_WORD*NUM_WORDS*TEST_CYCLES, "ber": ber, "one_to_zero": one_to_zero, "zero_to_one": zero_to_one}
+    mat = sio.savemat(f"csvs/{dev_name}/{dev_name}_ber_{timestamp}.mat", save_data)
 
 
             
 # SEI ARRIVATO QUI
 if not(DEBUG_BER_PLOT):
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots(3,1)
     # reshape ber into a 2D plot based on Vclksh and Vclkro
-    ber_shro = np.zeros((N_VBIAS, N_VINPUT))
+    ber_shro = np.zeros((3,N_VBIAS, N_VINPUT))
     for cfg in range(N_CONFIGS):
         ampl = TEST_CONFIGURATIONS[cfg]
-        ber_shro[np.where(V_BIAS_SWEEP == ampl[2])[0][0], np.where(V_INPUT_SWEEP == ampl[1])[0][0]] = ber[cfg,DAQ_CHANNELS.index(1)]
+        ber_shro[0, np.where(V_BIAS_SWEEP == ampl[2])[0][0], np.where(V_INPUT_SWEEP == ampl[1])[0][0]] = ber[cfg,DAQ_CHANNELS.index(1)]
+        ber_shro[1, np.where(V_BIAS_SWEEP == ampl[2])[0][0], np.where(V_INPUT_SWEEP == ampl[1])[0][0]] = one_to_zero[cfg,DAQ_CHANNELS.index(1)]/(SYMS_PER_WORD*NUM_WORDS*TEST_CYCLES)
+        ber_shro[2, np.where(V_BIAS_SWEEP == ampl[2])[0][0], np.where(V_INPUT_SWEEP == ampl[1])[0][0]] = zero_to_one[cfg,DAQ_CHANNELS.index(1)]/(SYMS_PER_WORD*NUM_WORDS*TEST_CYCLES)
     ber_min = 1/(SYMS_PER_WORD*NUM_WORDS*TEST_CYCLES)
-    im = ax.imshow(np.clip(ber_shro,ber_min,1), origin='lower', norm=mcolors.LogNorm(vmin=ber_min, vmax=1))
     t = np.logspace(np.ceil(np.log10(ber_min)), 0, 5)
-    cb = fig.colorbar(im, ax=ax)
-    cb.set_label('BER')
-    ax.set_title(f'Bit error rate {round(SYM6_PER_WORD*NUM_WORDS*TEST_CYCLES/1e3,3)}kS at {round(DAQ_FSAMP/DAQ_SYMBOL_SIZE/1e6,2)}MS/s ({timestamp}) threshold = max')
-    ax.set_xticks((N_VINPUT//4)*np.arange(5), np.round(V_INPUT_SWEEP[::(N_VINPUT//4)]*1e3).astype(np.int32))
-    ax.set_yticks((N_VBIAS//4)*np.arange(5), np.round(V_BIAS_SWEEP[::(N_VBIAS//4)]*1e3).astype(np.int32))
-    ax.set_xlabel("V_input [mV]")
-    ax.set_ylabel("V_bias [mV]")
-    plt.savefig(f'csvs/memory_cell_ber_{int(BIT_RATE/1e6)}MHz_{timestamp}.png', bbox_inches='tight')
+    for i in range(3):
+        im = ax[i].imshow(np.clip(ber_shro[i,:,:],ber_min,1), origin='lower', norm=mcolors.LogNorm(vmin=ber_min, vmax=1))
+        cb = fig.colorbar(im, ax=ax[i])
+        cb.set_label('BER')
+        if i == 0:
+            ber_type = 'total'
+        elif i == 1:
+            ber_type = '1 -> 0'
+        else:
+            ber_type = '0 -> 1'
+        ax[i].set_title(f'Bit error rate ({ber_type}) {round(SYMS_PER_WORD*NUM_WORDS*TEST_CYCLES/1e3,3)}kS at {round(DAQ_FSAMP/DAQ_SYMBOL_SIZE/1e6,2)}MS/s ({timestamp}) threshold = max')
+        ax[i].set_xticks((N_VINPUT//5)*np.arange(len(V_INPUT_SWEEP[::(N_VINPUT//5)])), np.round(V_INPUT_SWEEP[::(N_VINPUT//5)]*1e3).astype(np.int32))
+        ax[i].set_yticks((N_VBIAS//5)*np.arange(len(V_BIAS_SWEEP[::(N_VBIAS//5)])), np.round(V_BIAS_SWEEP[::(N_VBIAS//5)]*1e3).astype(np.int32))
+        ax[i].set_xlabel("V_input [mV]")
+        ax[i].set_ylabel("V_bias [mV]")
+    plt.savefig(f'csvs/{dev_name}/{dev_name}_ber_{int(BIT_RATE/1e6)}MHz_{timestamp}.png', bbox_inches='tight')
     plt.show()
     # very important to close AWG, otherwise the buffers will not get properly flushed
     print("closing AWG and DAQ")
-    awg.stop()
+    signal_awg.stop()
+    bias_awg.stop()
     daq.stop()
 
 if DEBUG_BER_PLOT:
@@ -520,15 +495,3 @@ if DEBUG_BER_PLOT:
     axs[2].step(np.linspace(0,(SYMS_PER_WORD*NUM_WORDS*TEST_CYCLES*(AWG_FSAMP//BIT_RATE)-1)/AWG_FSAMP/t_units,SYMS_PER_WORD*NUM_WORDS*TEST_CYCLES), 0.5*daq_symbols, label = 'syms', color=colors[0])
     axs[2].legend()
     plt.show()
-
-# if PLOT_RESULTS:
-#     print("plotting results")
-#     plt.figure()
-#     tvec = np.linspace(0,(DAQ_BUFFER_SIZE*TEST_CYCLES-1)/DAQ_FSAMP/t_units,DAQ_BUFFER_SIZE*TEST_CYCLES)
-#     colors = list(mcolors.TABLEAU_COLORS.keys())
-#     for n,channel in enumerate(DAQ_CHANNELS):
-#         plt.plot(tvec, n + daq_data[n], label = f'ch{channel}', color=colors[n])
-#     plt.legend()
-#     plt.xlabel(f"t [{siprefix[t_units]}s]")
-#     plt.ylabel("V [V]")
-#     plt.show()
